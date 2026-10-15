@@ -56,7 +56,7 @@ from datetime import date, datetime
 # PATH CONFIGURATION
 # -----------------------------
 # Root of the grapeDRF_doppler_model project
-BASE_DIR = "/home/bob/grapeDRF_doppler_model"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # the folder this script is in
 
 # Library directory: where input ZIPs are stored and extracted folders are kept
 LIBRARY_DIR = os.path.join(BASE_DIR, "data/library")
@@ -70,11 +70,12 @@ CONFIG_DIR = os.path.join(BASE_DIR, "config")
 # Full path to the IRI2016 apf107.dat solar/geomagnetic indices file used by
 # PHaRLAP/PyLap. This file must cover the dataset date or IRI will substitute
 # fill values (-111), leading to bad ionospheric profiles or a pathfinder crash.
-APF107_PATH = "/home/bob/PyLap_Project/PHARLAP/pharlap_4.5.0/dat/iri2016/apf107.dat"
+APF107_PATH = os.environ.get("APF107_PATH") or os.path.expanduser(
+    "~/PyLap_Project/PHARLAP/pharlap_4.5.0/dat/iri2016/apf107.dat")   # override with the APF107_PATH variable
 
 # Daily-updated source for apf107.dat provided by the University of New Brunswick
 # ECHAIM project on behalf of the IRI Working Group. Updated at ~08:00 EST daily.
-APF107_URL = "https://chain-new.chain-project.net/echaim_downloads/DBFiles/apf107.dat"
+APF107_URL = os.environ.get("APF107_URL") or "https://chain-new.chain-project.net/echaim_downloads/DBFiles/apf107.dat"
 
 
 # -----------------------------

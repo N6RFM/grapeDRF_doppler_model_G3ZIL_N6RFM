@@ -23,7 +23,8 @@ import re
 # -----------------------------
 # CONFIGURATION
 # -----------------------------
-CONFIG_DIR = "/home/bob/grapeDRF_doppler_model/config"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))   # the folder this script is in
+CONFIG_DIR = os.path.join(BASE_DIR, "config")
 DEFAULT_CONFIG = "N6RFM_config.ini"
 CSV_OUTPUT_BASE = "./output/csv"  # pathfinder CSV output base directory
 
@@ -116,6 +117,8 @@ def parse_ut_from_config(config_path):
 # MAIN PROGRAM
 # -----------------------------
 def main():
+    os.chdir(BASE_DIR)   # the steps use paths like ./pathfinder.sh and ./output/csv
+
     # 1️⃣ Select config
     config_file = select_config()
     config_path = os.path.join(CONFIG_DIR, config_file)
@@ -150,11 +153,11 @@ def main():
     print(f"Found: {expected_file}")
 
     # 7️⃣ Continue pipeline
-    run_step("modefinder", "python3", "modefinder_quiet.py", callsign, timestamp)
-    run_step("synthspec", "python3", "synthspec_ch_quiet.py", callsign, timestamp, "DB")
+    run_step("modefinder", sys.executable, "modefinder_quiet.py", callsign, timestamp)
+    run_step("synthspec", sys.executable, "synthspec_ch_quiet.py", callsign, timestamp, "DB")
     run_step(
         "spectrogram",
-        "python3",
+        sys.executable,
         "grape_fft_spectrogram_ch_quiet.py",
         f"ch0_{callsign}",
         "0",
