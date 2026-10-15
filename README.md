@@ -57,7 +57,7 @@ The meaning of these arguments is explained in the upstream README.
 
 ## Before you use these
 
-- **Edit the paths.** `run_pipeline.py` and `drf_data_loader_apf107_check.py` have path settings near the top (`CONFIG_DIR`, `BASE_DIR`, `APF107_PATH`) that point at my machine. Change them to match where you installed the project and PHaRLAP.
+- **Tell it where `apf107.dat` is.** The scripts and the window find the project folder from where they sit, so there are no paths to edit. The one setting that depends on your install is PHaRLAP's `apf107.dat`, which defaults to `~/PyLap_Project/PHARLAP/pharlap_4.5.0/dat/iri2016/apf107.dat`. If yours is elsewhere, set `export APF107_PATH=/your/path/apf107.dat` before starting, or use **Browse...** in `grape_gui.py`.
 - **ClickHouse password.** The `_ch` scripts read the database password from an environment variable rather than from the code:
   ```bash
   export CLICKHOUSE_PASSWORD='<your actual password>'
