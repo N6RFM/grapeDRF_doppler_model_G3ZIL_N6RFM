@@ -17,9 +17,10 @@ The files here are small conveniences I added for running the pipeline day to da
 
 | File | What it does |
 |---|---|
-| `drf_data_loader_apf107_check.py` | Replaces upstream's `drf_data_loader.py`. Lets you pick a GRAPE `OBS*.zip` (or an already-extracted folder) from `data/library/`, extracts it, writes the dataset's UT timestamp into your `config/<CALLSIGN>_config.ini`, and copies the data into `data/psws_grapeDRF/ch0_<CALLSIGN>/`. It also checks that your `apf107.dat` covers the dataset date and offers to download a current copy, since a stale file makes IRI use fill values and can crash pathfinder. |
+| `drf_data_loader_apf107_check.py` | Replaces upstream's `drf_data_loader.py`. Lets you pick a GRAPE `OBS*.zip` (or an already-extracted folder) from `data/library/`, extracts it, writes the dataset's UT timestamp into your `config/<CALLSIGN>_config.ini`, and copies the data into `data/psws_grapeDRF/ch0_<CALLSIGN>/`. It also checks that your `apf107.dat` covers the dataset date and offers to download a current copy (if the file is exactly one day short, it simply uses the previous day's values), since a stale file makes IRI use fill values and can crash pathfinder. |
 | `run_pipeline.py` | Interactive wrapper that runs the steps after the loader in order: pathfinder, modefinder, synthspec, spectrogram. It lists your configs, asks you to confirm the UT timestamp, checks that pathfinder produced its output, and reports the time each step took. |
-| `grape_gui.py` | A Tkinter window that does what the two scripts above do, without the prompts: choose a data zip or folder, check and refresh `apf107.dat`, choose a config, choose which of the station's frequencies to run (some or all), pick which steps to run, and watch a live log with per-step timing and a Cancel button. Needs Tkinter (`sudo apt install python3-tk`) and can run the steps in your venv. Start it with `python3 grape_gui.py` from the project folder. |
+| `grape_gui.py` | A Tkinter window that does what the two scripts above do, without the prompts: choose a data zip or folder, check and refresh `apf107.dat`, choose a config, choose which of the station's frequencies to run (some or all), pick which steps to run, and watch a live log with per-step timing and a Cancel button. Needs Tkinter (`sudo apt install python3-tk`) and can run the steps in your venv. It shows the station's details from the data's metadata, and when `apf107.dat` is exactly one day short it uses the previous day's values automatically. A **Two-hop sidescatter...** button opens the window below. Start it with `python3 grape_gui.py` from the project folder. |
+| `sidescatter_gui.py` | A Tkinter window for G3ZIL's two-hop sidescatter tools (`SS_sidescatter.sh`, `SS_sidescatter_plot.py`, `SS_animate.sh`). It reads and writes the same `config/<CALLSIGN>_config.ini` files as `grape_gui.py`, runs one time or an animation, and lists the pictures and data it produced. See [Two-hop sidescatter window](#two-hop-sidescatter-window). Start it with `python3 sidescatter_gui.py`, or from the button in `grape_gui.py`. |
 | `modefinder_quiet.py` | `modefinder.py` without the on-screen plot windows, so it runs unattended. Plots are still saved to `output/plots/`. |
 | `synthspec_ch.py`, `synthspec_ch_quiet.py` | ClickHouse-database versions of `synthspec.py`, with a quiet variant for batch runs. |
 | `grape_fft_spectrogram_ch.py`, `grape_fft_spectrogram_ch_quiet.py` | ClickHouse-database versions of `grape_fft_spectrogram.py`, with a quiet variant for batch runs. |
@@ -41,6 +42,8 @@ python3 run_pipeline.py                          # pathfinder, modefinder, synth
 ```
 
 or use the window instead: `python3 grape_gui.py`
+
+and for the two-hop sidescatter tools: `python3 sidescatter_gui.py`
 
 or step by step, as `run_pipeline.py` does it:
 
@@ -227,7 +230,7 @@ git merge upstream/main     # if README.md conflicts, keep this page's version
 - **Gwyn Griffiths, G3ZIL**: the grapeDRF Doppler model itself, and everything upstream of this page.
 - **W. Engelke, AB4EJ**: `plotspectrum_V4a.py`.
 - **Bob, N6RFM**: the convenience scripts on this page.
-- **Claude (Anthropic)**: co-wrote `grape_gui.py` with N6RFM, and helped with the repository clean-up, the ClickHouse password handling and this README.
+- **Claude (Anthropic)**: co-wrote `grape_gui.py` and `sidescatter_gui.py` with N6RFM, and helped with the repository clean-up, the ClickHouse password handling and this README.
 
 ## Contact
 
