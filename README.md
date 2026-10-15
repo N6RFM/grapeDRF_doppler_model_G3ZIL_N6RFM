@@ -19,6 +19,7 @@ The files here are small conveniences I added for running the pipeline day to da
 |---|---|
 | `drf_data_loader_apf107_check.py` | Replaces upstream's `drf_data_loader.py`. Lets you pick a GRAPE `OBS*.zip` (or an already-extracted folder) from `data/library/`, extracts it, writes the dataset's UT timestamp into your `config/<CALLSIGN>_config.ini`, and copies the data into `data/psws_grapeDRF/ch0_<CALLSIGN>/`. It also checks that your `apf107.dat` covers the dataset date and offers to download a current copy, since a stale file makes IRI use fill values and can crash pathfinder. |
 | `run_pipeline.py` | Interactive wrapper that runs the steps after the loader in order: pathfinder, modefinder, synthspec, spectrogram. It lists your configs, asks you to confirm the UT timestamp, checks that pathfinder produced its output, and reports the time each step took. |
+| `grape_gui.py` | A Tkinter window that does what the two scripts above do, without the prompts: choose a data zip or folder, check and refresh `apf107.dat`, choose a config, pick which steps to run, and watch a live log with per-step timing and a Cancel button. Needs Tkinter (`sudo apt install python3-tk`) and can run the steps in your venv. Start it with `python3 grape_gui.py` from the project folder. |
 | `modefinder_quiet.py` | `modefinder.py` without the on-screen plot windows, so it runs unattended. Plots are still saved to `output/plots/`. |
 | `synthspec_ch.py`, `synthspec_ch_quiet.py` | ClickHouse-database versions of `synthspec.py`, with a quiet variant for batch runs. |
 | `grape_fft_spectrogram_ch.py`, `grape_fft_spectrogram_ch_quiet.py` | ClickHouse-database versions of `grape_fft_spectrogram.py`, with a quiet variant for batch runs. |
@@ -38,6 +39,8 @@ The files here are small conveniences I added for running the pipeline day to da
 python3 drf_data_loader_apf107_check.py          # pick the day's data, sets UT in your config
 python3 run_pipeline.py                          # pathfinder, modefinder, synthspec, spectrogram
 ```
+
+or use the window instead: `python3 grape_gui.py`
 
 or step by step, as `run_pipeline.py` does it:
 

@@ -168,3 +168,4 @@ data/psws_grapeDRF/
 __pycache__/
 *.zip
 *.h5
+grape_gui_settings.json
