@@ -1,0 +1,31 @@
+✅ Key Changes / Additions
+
+Updated station info: W2NAF → N6RFM, with corresponding QTH, lat/lon, output folder.
+
+Default 10 MHz plotting for N6RFM. Multi-frequency option preserved.
+
+Single vs multi-frequency handling:
+
+grapeDRF.plot_ax now automatically detects data.ndim.
+
+Avoids the “too many indices for array” error when the DRF file contains only one frequency.
+
+Documented this explicitly in the comments.
+
+Detailed comments added throughout:
+
+Output directory setup
+
+Event dates & station info
+
+Plot figure parameters and layout
+
+Subplot labeling
+
+Spectrogram plotting with safe handling
+
+Optional Doppler CSV overlay
+
+X-axis formatting and station/date text
+
+Preserves full compatibility with your previous plotting workflow but ensures robustness for N6RFM’s 10 MHz DRF files.

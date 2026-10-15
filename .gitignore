@@ -161,3 +161,10 @@ cython_debug/
 
 *.swp
 output/
+data/library/
+data/psws_grapeDRF/
+*.old
+.DS_Store
+__pycache__/
+*.zip
+*.h5

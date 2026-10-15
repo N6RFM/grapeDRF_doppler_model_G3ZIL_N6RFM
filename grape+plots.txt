@@ -1,0 +1,19 @@
+ 1918  cd grapeDRF_doppler_model
+ 
+ 1920  python3 drf_data_loader.py 
+ 1921  python3 pathfinder.py ./config/N6RFM_config.ini 202603230000
+ 1922  
+ 1923  ./pathfinder.sh N6RFM_config.ini 1400
+ 1924  python3 modefinder_quiet.py N6RFM 202603230000
+
+ 1927  python3 synthspec_ch_quiet.py N6RFM 202603230000 DB
+ 1928  python3 grape_fft_spectrogram_ch_quiet.py ch0_N6RFM 0 0 24 DB
+ 1929  cd grapeDRF_doppler_model
+ 1930 
+ 1931  python3 drf_data_loader.py 
+ 1932  ./pathfinder.sh N6RFM_config.ini 1400
+ 1933  python3 modefinder_quiet.py N6RFM 202603240000
+ 1934  python3 synthspec_ch_quiet.py N6RFM 202603240000 DB
+ 1935  python3 grape_fft_spectrogram_ch_quiet.py ch0_N6RFM 0 0 24 DB
+ 1936  cd grapeDRF_doppler_model
+

@@ -1,0 +1,64 @@
+Here’s a clear summary of the changes made to grapeDRF.py:
+
+Robust single vs. multi-frequency support
+
+load_grape_drf now correctly handles datasets with only one frequency (data.ndim == 1) as well as multiple frequencies.
+
+Explicit float casting for frequencies
+
+Ensures indexing and dictionary keys work correctly, avoiding IndexError issues.
+
+Improved debug and logging
+
+Prints center frequencies, latitude, longitude, and data shapes for easier debugging.
+
+Safe plotting enhancements
+
+plot_ax now handles missing data for a frequency by displaying an error on the plot instead of failing.
+
+Colorbar creation is wrapped in a try-except to prevent crashes.
+
+Spectrum plotting refinements
+
+FFT frequency array explicitly cast to float64.
+
+Spectrogram time vector (spectrum_timevec) is computed only once and reused.
+
+Code readability and maintainability
+
+Cleaner loops and dictionary handling (bigarray_dct initialization).
+
+Comments and docstrings added for clarity.
+
+Optional improvements implemented
+
+Debug-friendly prints.
+
+Automatic handling of both single- and multi-frequency data.
+
+Safer plotting logic for axes, xticks, and overlays.
+
+In short: the code is now more robust, supports single-frequency datasets, avoids indexing errors, and produces safer plots with better debugging information.
+
+If you want, I can also give a one-line “before vs after” summary of the load_grape_drf critical fix that solved your earlier IndexError.
+
+Do you want me to do that?
+
+yes
+
+Here’s the one-line before vs after summary for the critical fix in load_grape_drf:
+
+Before:
+
+bigarray[:] = data[:, cfreq_inx]   # assumed data is always 2D → IndexError if only 1 frequency
+
+After:
+
+if data.ndim == 1:
+    bigarray[:] = data          # single frequency, 1D array
+else:
+    bigarray[:] = data[:, cfreq_inx]  # multiple frequencies, 2D array
+
+✅ This change allows the function to handle both single-frequency and multi-frequency DRF data without raising an IndexError.
+
+This was the key change that fixed the error you saw when plotting N6RFM data.
