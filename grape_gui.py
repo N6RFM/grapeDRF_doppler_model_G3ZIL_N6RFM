@@ -1351,9 +1351,8 @@ class App(tk.Tk):
         if call:
             who = f"Station {call} ({grid})" if grid else f"Station {call}"
         else:
-            bits = [x for x in (f"receiver {meta.get('uuid')}" if meta.get("uuid") else "",
-                                f"lat {meta['lat']:g}, lon {meta['lon']:g}" if meta.get("lat") or meta.get("lon") else "") if x]
-            who = "Callsign not recorded in this data" + (f" ({'; '.join(bits)})" if bits else "")
+            loc = f" (lat {meta['lat']:g}, lon {meta['lon']:g})" if meta.get("lat") or meta.get("lon") else ""
+            who = "Callsign not recorded in this data" + loc
         text = (f"{who}, {len(freqs)} frequenc{'y' if len(freqs) == 1 else 'ies'}: "
                 + ", ".join(fmt_freq(f) for f in freqs) + " MHz")
         warn = False
