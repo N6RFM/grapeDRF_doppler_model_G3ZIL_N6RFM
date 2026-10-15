@@ -286,14 +286,19 @@ class SSApp(tk.Tk):
         ttk.Button(p, text="Browse...", command=self.on_browse_python).pack(side="left")
         ttk.Button(p, text="Check setup", command=self.on_check).pack(side="left", padx=(6, 0))
 
-        self.tree = ttk.Treeview(f3, columns=("status", "time"), height=2)
+        twrap = ttk.Frame(f3)
+        twrap.pack(fill="x", pady=(8, 0))
+        tbar = ttk.Scrollbar(twrap, orient="vertical")
+        tbar.pack(side="right", fill="y")
+        self.tree = ttk.Treeview(twrap, columns=("status", "time"), height=3, yscrollcommand=tbar.set)
+        tbar.configure(command=self.tree.yview)
         self.tree.heading("#0", text="Step")
         self.tree.heading("status", text="Status")
         self.tree.heading("time", text="Elapsed")
         self.tree.column("#0", width=380)
         self.tree.column("status", width=200)
         self.tree.column("time", width=100, anchor="e")
-        self.tree.pack(fill="x", pady=(8, 0))
+        self.tree.pack(side="left", fill="x", expand=True)
 
         b = ttk.Frame(f3)
         b.pack(fill="x", pady=(8, 0))
@@ -311,12 +316,21 @@ class SSApp(tk.Tk):
         self.peak_var = tk.StringVar()
         ttk.Label(f4, textvariable=self.peak_var, foreground="gray25", wraplength=900,
                   justify="left").pack(anchor="w", pady=(2, 4))
-        self.rtree = ttk.Treeview(f4, columns=("what",), height=5)
+        rwrap = ttk.Frame(f4)
+        rwrap.pack(fill="x")
+        rbar = ttk.Scrollbar(rwrap, orient="vertical")
+        rbar.pack(side="right", fill="y")
+        self.rtree = ttk.Treeview(rwrap, columns=("what",), height=6, yscrollcommand=rbar.set)
+        rbar.configure(command=self.rtree.yview)
         self.rtree.heading("#0", text="File")
         self.rtree.heading("what", text="What it is")
         self.rtree.column("#0", width=470)
         self.rtree.column("what", width=380)
-        self.rtree.pack(fill="x")
+        self.rtree.pack(side="left", fill="x", expand=True)
+        # the wheel scrolls the list while the pointer is over it, the page elsewhere
+        self.rtree.bind("<MouseWheel>", lambda e: (self.rtree.yview_scroll(-1 * (e.delta // 120), "units"), "break")[1])
+        self.rtree.bind("<Button-4>", lambda e: (self.rtree.yview_scroll(-1, "units"), "break")[1])
+        self.rtree.bind("<Button-5>", lambda e: (self.rtree.yview_scroll(1, "units"), "break")[1])
         self.rtree.bind("<Double-1>", lambda e: self.on_open_selected())
         self.rtree.bind("<Return>", lambda e: self.on_open_selected())
         ttk.Button(f4, text="Open selected", command=self.on_open_selected).pack(anchor="e", pady=(6, 0))
@@ -603,7 +617,6 @@ class SSApp(tk.Tk):
             self.tree.delete(it)
         for k, label in steps:
             self.tree.insert("", "end", iid=k, text=label, values=("waiting", ""))
-        self.tree.configure(height=len(steps))
         threading.Thread(target=self._worker, args=(name, py, ut, values, anim, total, step, [k for k, _ in steps]),
                          daemon=True).start()
 

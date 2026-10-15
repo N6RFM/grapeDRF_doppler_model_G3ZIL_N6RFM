@@ -857,7 +857,12 @@ class App(tk.Tk):
             self.step_vars[key] = v
             ttk.Checkbutton(r3, text=label, variable=v).pack(side="left", padx=6)
 
-        self.tree = ttk.Treeview(f3, columns=("status", "elapsed"), height=4)
+        twrap = ttk.Frame(f3)
+        twrap.pack(fill="x", pady=(8, 0))
+        tbar = ttk.Scrollbar(twrap, orient="vertical")
+        tbar.pack(side="right", fill="y")
+        self.tree = ttk.Treeview(twrap, columns=("status", "elapsed"), height=4, yscrollcommand=tbar.set)
+        tbar.configure(command=self.tree.yview)
         self.tree.heading("#0", text="Step")
         self.tree.heading("status", text="Status")
         self.tree.heading("elapsed", text="Elapsed")
@@ -866,7 +871,7 @@ class App(tk.Tk):
         self.tree.column("elapsed", width=100, anchor="center")
         for key, label in STEP_DEFS:
             self.tree.insert("", "end", iid=key, text=label, values=("", ""))
-        self.tree.pack(fill="x", pady=(8, 0))
+        self.tree.pack(side="left", fill="x", expand=True)
 
         r4 = ttk.Frame(f3)
         r4.pack(fill="x", pady=(8, 0))
