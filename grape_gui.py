@@ -434,9 +434,10 @@ SCAN_SKIP = {".git", "data", "venv", ".venv", "env", "__pycache__", "node_module
 
 
 def snapshot_files():
-    """{relative path: (mtime, size)} for project files, skipping data/, venvs and .git."""
+    """{path relative to the project: (mtime, size)} for files under output/, where results are written.
+    Only output/ is watched, so edits you make elsewhere while a step runs are not mistaken for results."""
     snap = {}
-    for root, dirs, files in os.walk(BASE_DIR):
+    for root, dirs, files in os.walk(os.path.join(BASE_DIR, "output")):
         dirs[:] = [d for d in dirs if d not in SCAN_SKIP]
         for f in files:
             if f == os.path.basename(SETTINGS_FILE) or f.endswith((".pyc", ".tmp")):
