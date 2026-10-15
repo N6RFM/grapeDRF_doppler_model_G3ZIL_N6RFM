@@ -1198,7 +1198,7 @@ class App(tk.Tk):
         self.run_data_text = data_text
         rec = (self.settings.get("loaded") or {}).get(callsign)
         data_name = rec["source"] if rec else f"ch0_{callsign}"
-        self.title(f"{self.base_title}  -  {callsign}  {data_name}")
+        self.title(f"{self.base_title}  -  {callsign} {y:04d}-{mo:02d}-{d:02d}")
         self._set_busy(True, f"Running pipeline for {callsign}  |  {data_name}  |  UT {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}")
         self.btn_cancel.configure(state="normal")
         threading.Thread(
