@@ -2,6 +2,10 @@
 """
 grape_gui.py -- Tkinter front end for the grapeDRF_doppler_model workflow
 
+Author: Bob, N6RFM. Written with Claude (Anthropic), October 2026.
+Built on N6RFM's drf_data_loader_apf107_check.py and run_pipeline.py, which drive
+G3ZIL's grapeDRF_doppler_model (https://github.com/g3zil/grapeDRF_doppler_model).
+
 Combines what drf_data_loader_apf107_check.py and run_pipeline.py do, in one window:
 
   1. Choose the GRAPE dataset (OBS*.zip or an already-extracted ch0_* folder in
@@ -340,7 +344,12 @@ try:
 except ImportError:
     print("FAIL: the clickhouse_connect module is not installed in this Python (pip install clickhouse-connect)")
     sys.exit(2)
-print("clickhouse_connect", getattr(clickhouse_connect, "__version__", "?"))
+try:
+    from importlib.metadata import version as _ver
+    _v = _ver("clickhouse-connect")
+except Exception:
+    _v = "?"
+print("clickhouse_connect", _v)
 kw = dict(p)
 kw["password"] = os.environ.get("CLICKHOUSE_PASSWORD", "")
 try:
@@ -573,35 +582,38 @@ class App(tk.Tk):
         self.btn_cancel = ttk.Button(r4, text="Cancel", command=self.on_cancel, state="disabled")
         self.btn_cancel.pack(side="left", padx=6)
 
-        # log
-        f4 = ttk.LabelFrame(main, text="Output", padding=6)
-        f4.pack(fill="both", expand=True, pady=4)
-        self.log_box = scrolledtext.ScrolledText(f4, height=12, state="disabled", wrap="none")
+        # log: header row (label left, buttons right) above a dark console
+        f4 = ttk.Frame(main)
+        f4.pack(fill="both", expand=True, pady=(8, 4))
+        hdr = ttk.Frame(f4)
+        hdr.pack(fill="x", pady=(0, 4))
+        ttk.Label(hdr, text="Output:").pack(side="left")
+        ttk.Button(hdr, text="Clear", command=self._clear_log).pack(side="right")
+        ttk.Button(hdr, text="Copy", command=self._copy_best).pack(side="right", padx=8)
+        ttk.Button(hdr, text="Save to file...", command=self._save_log).pack(side="right")
+        self.log_box = scrolledtext.ScrolledText(
+            f4, height=12, state="disabled", wrap="none", bg="#111111", fg="#e6e6e6",
+            insertbackground="#e6e6e6", selectbackground="#3d6fb4", selectforeground="#ffffff",
+            relief="flat", font=("TkFixedFont", 10))
         self.log_box.pack(fill="both", expand=True)
-        lb = ttk.Frame(f4)
-        lb.pack(fill="x", pady=(4, 0))
         self.autoscroll_var = tk.BooleanVar(value=True)
-        ttk.Checkbutton(lb, text="Auto-scroll", variable=self.autoscroll_var).pack(side="left")
         self.wrap_var = tk.BooleanVar(value=False)
-        ttk.Checkbutton(lb, text="Wrap lines", variable=self.wrap_var,
-                        command=lambda: self.log_box.configure(wrap="word" if self.wrap_var.get() else "none")
-                        ).pack(side="left", padx=8)
-        ttk.Button(lb, text="Clear", command=self._clear_log).pack(side="right")
-        ttk.Button(lb, text="Save...", command=self._save_log).pack(side="right", padx=4)
-        ttk.Button(lb, text="Copy all", command=self._copy_all).pack(side="right")
-        ttk.Button(lb, text="Copy selection", command=self._copy_selection).pack(side="right", padx=4)
 
         # selecting/copying works even though the box is read-only
         self.log_box.bind("<Button-1>", lambda e: self.log_box.focus_set())
-        self.log_box.bind("<Control-c>", lambda e: (self._copy_selection(), "break")[1])
+        self.log_box.bind("<Control-c>", lambda e: (self._copy_best(), "break")[1])
         self.log_box.bind("<Control-a>", lambda e: (self._select_all(), "break")[1])
         self.log_box.bind("<Control-l>", lambda e: (self._clear_log(), "break")[1])
         menu = tk.Menu(self.log_box, tearoff=0)
-        menu.add_command(label="Copy", command=self._copy_selection)
+        menu.add_command(label="Copy selection", command=self._copy_selection)
         menu.add_command(label="Copy all", command=self._copy_all)
         menu.add_command(label="Select all", command=self._select_all)
         menu.add_separator()
-        menu.add_command(label="Save log...", command=self._save_log)
+        menu.add_checkbutton(label="Auto-scroll", variable=self.autoscroll_var)
+        menu.add_checkbutton(label="Wrap lines", variable=self.wrap_var,
+                             command=lambda: self.log_box.configure(wrap="word" if self.wrap_var.get() else "none"))
+        menu.add_separator()
+        menu.add_command(label="Save to file...", command=self._save_log)
         menu.add_command(label="Clear", command=self._clear_log)
         for ev in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
             self.log_box.bind(ev, lambda e, m=menu: (self.log_box.focus_set(), m.tk_popup(e.x_root, e.y_root), "break")[2])
@@ -643,6 +655,13 @@ class App(tk.Tk):
             self._clipboard_set(self.log_box.get("sel.first", "sel.last"))
         except tk.TclError:
             pass   # nothing selected
+
+    def _copy_best(self):
+        """Copy the selection if there is one, otherwise the whole output."""
+        if self.log_box.tag_ranges("sel"):
+            self._copy_selection()
+        else:
+            self._copy_all()
 
     def _copy_all(self):
         self._clipboard_set(self.log_box.get("1.0", "end-1c"))

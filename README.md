@@ -74,6 +74,13 @@ git fetch upstream
 git merge upstream/main     # if README.md conflicts, keep this page's version
 ```
 
+## Credits
+
+- **Gwyn Griffiths, G3ZIL**: the grapeDRF Doppler model itself, and everything upstream of this page.
+- **W. Engelke, AB4EJ**: `plotspectrum_V4a.py`.
+- **Bob, N6RFM**: the convenience scripts on this page.
+- **Claude (Anthropic)**: co-wrote `grape_gui.py` with N6RFM, and helped with the repository clean-up, the ClickHouse password handling and this README.
+
 ## Contact
 
 Bob, N6RFM. Suggestions and corrections to my additions are welcome via GitHub issues.
