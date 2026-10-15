@@ -171,7 +171,7 @@ def result_order(rel):
 class SSApp(tk.Tk):
     def __init__(self, preselect=None):
         super().__init__()
-        self.title("Two-hop sidescatter")
+        self.title("G3ZIL Two-hop sidescatter")
         self.geometry("980x840")
         self.minsize(820, 640)
         self.settings = gg.load_settings()

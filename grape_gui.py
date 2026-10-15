@@ -663,7 +663,7 @@ def save_settings(settings):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.base_title = "G3ZIL_GRAPE DRF Doppler Model launcher"
+        self.base_title = "G3ZIL GRAPE DRF Doppler Model launcher"
         self.title(self.base_title)
         self.geometry("1000x820")
         self.minsize(820, 640)
