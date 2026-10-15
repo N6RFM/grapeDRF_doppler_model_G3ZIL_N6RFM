@@ -503,8 +503,37 @@ class App(tk.Tk):
 
     # ---------- layout ----------
     def _build(self):
-        main = ttk.Frame(self, padding=8)
-        main.pack(fill="both", expand=True)
+        # status bar first so it always stays visible at the bottom
+        self.status_var = tk.StringVar(value="Ready")
+        ttk.Label(self, textvariable=self.status_var, relief="sunken", anchor="w").pack(fill="x", side="bottom")
+
+        # whole-window vertical scroll bar at the far right edge
+        vbar = ttk.Scrollbar(self, orient="vertical")
+        vbar.pack(side="right", fill="y")
+        canvas = tk.Canvas(self, highlightthickness=0, yscrollcommand=vbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        vbar.configure(command=canvas.yview)
+        main = ttk.Frame(canvas, padding=8)
+        win = canvas.create_window((0, 0), window=main, anchor="nw")
+
+        def fit(_event=None):
+            # follow the window width; use the window height when taller than the content
+            canvas.itemconfigure(win, width=canvas.winfo_width(),
+                                 height=max(canvas.winfo_height(), main.winfo_reqheight()))
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.bind("<Configure>", fit)
+        main.bind("<Configure>", fit)
+
+        def wheel(event):
+            if isinstance(event.widget, (tk.Text, tk.Listbox, ttk.Treeview, ttk.Combobox)):
+                return   # those scroll themselves
+            if canvas.bbox("all") and canvas.bbox("all")[3] <= canvas.winfo_height():
+                return   # everything fits; nothing to scroll
+            step = -1 if (getattr(event, "num", 0) == 4 or getattr(event, "delta", 0) > 0) else 1
+            canvas.yview_scroll(step * 3, "units")
+        self.bind_all("<MouseWheel>", wheel)
+        self.bind_all("<Button-4>", wheel)
+        self.bind_all("<Button-5>", wheel)
 
         # 1. data
         f1 = ttk.LabelFrame(main, text="1. Choose data to analyze  (data/library)", padding=6)
@@ -593,9 +622,9 @@ class App(tk.Tk):
         self.btn_ch_test = ttk.Button(rc, text="Test", command=self.on_ch_test)
         self.btn_ch_test.pack(side="left")
         self.ch_auto_var = tk.BooleanVar(value=self.settings.get("ch_auto_start", True))
-        ttk.Checkbutton(rc, text="Start automatically if needed", variable=self.ch_auto_var).pack(side="left", padx=(12, 0))
+        ttk.Checkbutton(rc, text="Auto-start if needed", variable=self.ch_auto_var).pack(side="left", padx=(12, 0))
         self.ch_stop_var = tk.BooleanVar(value=self.settings.get("ch_stop_after", True))
-        ttk.Checkbutton(rc, text="Stop afterwards (only if I started it)", variable=self.ch_stop_var).pack(side="left", padx=8)
+        ttk.Checkbutton(rc, text="Stop afterwards (if I started it)", variable=self.ch_stop_var).pack(side="left", padx=8)
 
         rp = ttk.Frame(f3)
         rp.pack(fill="x", pady=(6, 0))
@@ -667,9 +696,6 @@ class App(tk.Tk):
         menu.add_command(label="Clear", command=self._clear_log)
         for ev in ("<Button-3>", "<Button-2>", "<Control-Button-1>"):
             self.log_box.bind(ev, lambda e, m=menu: (self.log_box.focus_set(), m.tk_popup(e.x_root, e.y_root), "break")[2])
-
-        self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(self, textvariable=self.status_var, relief="sunken", anchor="w").pack(fill="x", side="bottom")
 
         self._action_buttons = [
             self.btn_refresh, self.btn_load, self.btn_apf_update, self.btn_apf_check, self.btn_run
