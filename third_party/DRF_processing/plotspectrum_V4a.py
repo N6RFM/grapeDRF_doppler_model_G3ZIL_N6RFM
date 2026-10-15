@@ -1,5 +1,6 @@
 # DRF Spectrum Plotter
 # Author: W. Engelke, AB4EJ, University of Alabama
+# Modified by N6RFM: np.complex replaced with the builtin complex (np.complex was removed in NumPy 1.24)
 
 import matplotlib.pyplot as plt
 import matplotlib.colors

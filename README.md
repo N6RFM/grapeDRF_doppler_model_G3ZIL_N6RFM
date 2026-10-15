@@ -28,7 +28,7 @@ The files here are small conveniences I added for running the pipeline day to da
 | File | What it does |
 |---|---|
 | `plot_n6rfm_grapeDRF_2024eclipse.py` | The 2024 eclipse plotting script set up for station N6RFM (10 MHz by default), handling DRF files that contain only a single frequency. |
-| `third_party/DRF_processing/plotspectrum_V4a.py` | A quick-look spectrum plotter for a single GRAPE DRF day, by W. Engelke, AB4EJ (University of Alabama). Copied unmodified from https://github.com/HamSCI/DRF_processing and used under its GPL-3.0 license (included alongside the file). |
+| `third_party/DRF_processing/plotspectrum_V4a.py` | A quick-look spectrum plotter for a single GRAPE DRF day, by W. Engelke, AB4EJ (University of Alabama). Copied from https://github.com/HamSCI/DRF_processing with one small change (`np.complex` replaced by `complex` for newer NumPy) and used under its GPL-3.0 license (included alongside the file). |
 | `config/N6RFM_config.ini` | An example station config. Copy it, rename it `<YOURCALL>_config.ini`, and edit it for your own station. |
 | `data/apf107.dat`, `data/Kp_ap_Ap_SN_F107.txt` | Solar and geomagnetic index files, for convenience. Refresh them for newer dates. |
 
