@@ -19,7 +19,7 @@ The files here are small conveniences I added for running the pipeline day to da
 |---|---|
 | `drf_data_loader_apf107_check.py` | Replaces upstream's `drf_data_loader.py`. Lets you pick a GRAPE `OBS*.zip` (or an already-extracted folder) from `data/library/`, extracts it, writes the dataset's UT timestamp into your `config/<CALLSIGN>_config.ini`, and copies the data into `data/psws_grapeDRF/ch0_<CALLSIGN>/`. It also checks that your `apf107.dat` covers the dataset date and offers to download a current copy, since a stale file makes IRI use fill values and can crash pathfinder. |
 | `run_pipeline.py` | Interactive wrapper that runs the steps after the loader in order: pathfinder, modefinder, synthspec, spectrogram. It lists your configs, asks you to confirm the UT timestamp, checks that pathfinder produced its output, and reports the time each step took. |
-| `grape_gui.py` | A Tkinter window that does what the two scripts above do, without the prompts: choose a data zip or folder, check and refresh `apf107.dat`, choose a config, pick which steps to run, and watch a live log with per-step timing and a Cancel button. Needs Tkinter (`sudo apt install python3-tk`) and can run the steps in your venv. Start it with `python3 grape_gui.py` from the project folder. |
+| `grape_gui.py` | A Tkinter window that does what the two scripts above do, without the prompts: choose a data zip or folder, check and refresh `apf107.dat`, choose a config, choose which of the station's frequencies to run (some or all), pick which steps to run, and watch a live log with per-step timing and a Cancel button. Needs Tkinter (`sudo apt install python3-tk`) and can run the steps in your venv. Start it with `python3 grape_gui.py` from the project folder. |
 | `modefinder_quiet.py` | `modefinder.py` without the on-screen plot windows, so it runs unattended. Plots are still saved to `output/plots/`. |
 | `synthspec_ch.py`, `synthspec_ch_quiet.py` | ClickHouse-database versions of `synthspec.py`, with a quiet variant for batch runs. |
 | `grape_fft_spectrogram_ch.py`, `grape_fft_spectrogram_ch_quiet.py` | ClickHouse-database versions of `grape_fft_spectrogram.py`, with a quiet variant for batch runs. |
@@ -154,6 +154,21 @@ or download the file yourself and use **Browse...** to point the window at it (P
 ### "No 'ut = [...]' line in this config"
 
 The loader writes the dataset's UT into `config/<CALLSIGN>_config.ini`. A config for a station you have not loaded data for yet has no `ut` line. Select the data and press **Load selected data** first.
+
+### Stations that record several frequencies
+
+Some GRAPE stations record several frequencies in one Digital RF dataset (one `ch0` folder, one column per frequency), while others record a single frequency. `grape_gui.py` reads the station's metadata and shows the callsign, grid square and frequencies as soon as you select a zip or folder. The **Frequencies** row then lists the frequencies in the data that is loaded, and you can tick some or all of them.
+
+The model works on one frequency at a time. The config's `freq = ...` line feeds pathfinder and synthspec, and the spectrogram step takes the position of the frequency in the data. For every frequency you tick, the window sets `freq` in the config, works out the position, runs the steps you chose, and puts the config's original `freq` line back afterwards. Two things follow from that:
+
+- **It takes longer.** Each frequency runs its own pathfinder ray tracing, so six frequencies take about six times as long as one.
+- **Files are overwritten between frequencies.** The pathfinder and modefinder CSVs and the synthspec plots have the same names for every frequency. When more than one frequency is run, the window saves a copy of each frequency's files in `output/by_frequency/<callsign>_<time>/<freq>MHz/`; the files directly in `output/` belong to the last frequency run. The synthetic spectra in ClickHouse keep a `frequency` column, so they are not mixed up. The spectrogram images include the frequency in their names.
+
+If you skip Pathfinder, the window refuses to run modefinder or synthspec for a frequency other than the one the existing pathfinder output was computed for. Path settings in the config (`tx`, `tx_grid`, `distance`, `bearing`, ...) apply to every frequency you tick, so for frequencies that come from different transmitters, run them separately with the right config.
+
+The spectrogram step reads `config/<callsign in the data>_config.ini`, so the callsign in the data must match a config file name. The window fills the callsign box from the data and warns you if that config does not exist.
+
+The frequency list is read with `h5py` in the Python named in the **Python (venv)** field, which is the Python that already has the Digital RF packages. If the list shows "unknown", load the data first, or check that Python can `import h5py`.
 
 ### Where are my results?
 
