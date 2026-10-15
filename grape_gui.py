@@ -259,6 +259,10 @@ def copy_data(folder_name, callsign, log):
 
 
 CH_SERVICE = os.environ.get("CLICKHOUSE_SERVICE", "clickhouse-server")
+# tables the DB steps write to (upstream README, Appendix A)
+CH_REQUIRED_TABLES = ["synth_spec"]
+# output lines that mean a step failed even though it exited normally
+FAIL_MARKERS = ("Unable to connect or insert",)
 CH_PING_URL = os.environ.get("CLICKHOUSE_PING_URL", "http://localhost:8123/ping")
 
 
@@ -339,6 +343,7 @@ def ch_params():
 CH_CHECK_SCRIPT = r"""
 import json, os, sys
 p = json.loads(sys.argv[1])
+required = p.pop("_require", [])
 try:
     import clickhouse_connect
 except ImportError:
@@ -362,6 +367,15 @@ try:
     tabs = c.query("SELECT database, name, total_rows FROM system.tables WHERE database NOT IN ('system','INFORMATION_SCHEMA','information_schema') ORDER BY 1,2").result_rows
     for d, t, n in tabs[:30]:
         print(f"  {d}.{t}: {n} rows")
+    have = {(d, t) for d, t, _ in tabs}
+    db = c.database
+    missing = [t for t in required if (db, t) not in have]
+    if missing:
+        print(f"FAIL: required table(s) missing in database '{db}': {', '.join(missing)} "
+              "(create them from Appendix A of the upstream README)")
+        sys.exit(3)
+    if required:
+        print("required tables present:", ", ".join(required))
     print("OK")
 except Exception as e:
     print("FAIL:", type(e).__name__, str(e).splitlines()[0][:300] if str(e) else "")
@@ -377,7 +391,7 @@ def ch_check(py, log):
     if not os.environ.get("CLICKHOUSE_PASSWORD"):
         log("  note: CLICKHOUSE_PASSWORD is not set in this environment (fine only if the user has no password)")
     try:
-        r = subprocess.run([py, "-c", CH_CHECK_SCRIPT, json.dumps(params)],
+        r = subprocess.run([py, "-c", CH_CHECK_SCRIPT, json.dumps(dict(params, _require=CH_REQUIRED_TABLES))],
                            capture_output=True, text=True, timeout=60, cwd=BASE_DIR)
     except (OSError, subprocess.TimeoutExpired) as e:
         log(f"  FAIL: could not run the check: {e}")
@@ -385,6 +399,34 @@ def ch_check(py, log):
     for line in (r.stdout + r.stderr).splitlines():
         log("  " + line)
     return r.returncode == 0 and "OK" in r.stdout.splitlines()[-1:]
+
+
+def describe_data(callsign, ut, settings):
+    """
+    Which dataset is in data/psws_grapeDRF/ch0_<CALL>/ ?  Returns (text, warn).
+    Uses what this window recorded when the data was loaded; otherwise a best guess
+    from the library by the date in the config's UT.
+    """
+    dest = os.path.join(DATA_ROOT, f"ch0_{callsign}")
+    if not (os.path.isdir(dest) and os.listdir(dest)):
+        return (f"Data: nothing in data/psws_grapeDRF/ch0_{callsign}  (load a dataset first)", True)
+    rec = (settings.get("loaded") or {}).get(callsign)
+    cfg_day = tuple(ut[:3]) if ut else None
+    if rec:
+        text = f"Data: {rec['source']}  ->  ch0_{callsign}   (day {rec['ut'][0]:04d}-{rec['ut'][1]:02d}-{rec['ut'][2]:02d}, loaded {rec['when']})"
+        if cfg_day and tuple(rec["ut"][:3]) != cfg_day:
+            return (text + f"   WARNING: config UT day is {cfg_day[0]:04d}-{cfg_day[1]:02d}-{cfg_day[2]:02d}", True)
+        return (text, False)
+    guess = []
+    for stype, name in find_sources():
+        try:
+            if cfg_day and tuple(source_datetime(stype, name)[:3]) == cfg_day:
+                guess.append(name)
+        except ValueError:
+            pass
+    if guess:
+        return (f"Data: not loaded through this window; the config day matches {', '.join(guess)}", False)
+    return ("Data: not loaded through this window; source unknown", True)
 
 
 def detect_python():
@@ -424,7 +466,8 @@ def save_settings(settings):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("GRAPE DRF Doppler Model launcher")
+        self.base_title = "GRAPE DRF Doppler Model launcher"
+        self.title(self.base_title)
         self.geometry("1000x820")
         self.minsize(820, 640)
 
@@ -436,6 +479,8 @@ class App(tk.Tk):
         self.sources = []
         self.py_path = sys.executable
         self.ch_auto = self.ch_stop = True
+        self.flagged = None
+        self.run_data_text = ""
         self.ch_op = False
         self.ch_started_by_gui = False
 
@@ -529,6 +574,11 @@ class App(tk.Tk):
         ttk.Entry(r2, textvariable=self.spec_var, width=10).pack(side="left", padx=4)
         self.db_var = tk.BooleanVar(value=self.settings.get("db", True))
         ttk.Checkbutton(r2, text="Use ClickHouse DB (DB flag)", variable=self.db_var).pack(side="left", padx=12)
+
+        self.data_var = tk.StringVar()
+        self.data_label = ttk.Label(f3, textvariable=self.data_var, font=("TkDefaultFont", 10, "bold"),
+                                    wraplength=960, justify="left")
+        self.data_label.pack(fill="x", pady=(6, 0))
 
         rc = ttk.Frame(f3)
         rc.pack(fill="x", pady=(6, 0))
@@ -767,7 +817,9 @@ class App(tk.Tk):
                 self.log(f"Updated config: {cfg_path}  ut = [{y},{mo},{d},{h},{mi}]")
                 copy_data(folder, callsign, self.log)
                 self.log(f"READY -> {dest}")
-                self.post(lambda: self._load_done(callsign))
+                info = dict(source=name, kind=stype, folder=folder, ut=[y, mo, d, h, mi],
+                            when=datetime.now().strftime("%Y-%m-%d %H:%M"))
+                self.post(lambda: self._load_done(callsign, info))
             except Exception as e:
                 msg = str(e)
                 self.log(f"ERROR: {msg}")
@@ -776,7 +828,10 @@ class App(tk.Tk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _load_done(self, callsign):
+    def _load_done(self, callsign, info=None):
+        if info:
+            self.settings.setdefault("loaded", {})[callsign] = info
+            save_settings(self.settings)
         self.refresh_sources()
         self.refresh_configs(select=f"{callsign}_config.ini")
         self._set_busy(False, f"Data loaded for {callsign}. Ready to run the pipeline.")
@@ -995,8 +1050,23 @@ class App(tk.Tk):
         if path:
             self.py_var.set(path)
 
+    def refresh_data_banner(self):
+        cfg = self.config_var.get()
+        if not cfg:
+            self.data_var.set("")
+            return
+        callsign = cfg.split("_")[0]
+        try:
+            ut = read_ut(os.path.join(CONFIG_DIR, cfg))
+        except Exception:
+            ut = None
+        text, warn = describe_data(callsign, ut, self.settings)
+        self.data_var.set(text)
+        self.data_label.configure(foreground="#b36b00" if warn else "#1a5fb4")
+
     def refresh_ut(self):
         cfg = self.config_var.get()
+        self.refresh_data_banner()
         if not cfg:
             self.ut_var.set("No config files found")
             return
@@ -1058,7 +1128,12 @@ class App(tk.Tk):
         for key, label in STEP_DEFS:
             self._tree_set(key, "Pending" if key in steps else "Skipped", "")
         self.cancel_flag.clear()
-        self._set_busy(True, f"Running pipeline for {callsign} {timestamp} ...")
+        data_text, _warn = describe_data(callsign, (y, mo, d, h, mi), self.settings)
+        self.run_data_text = data_text
+        rec = (self.settings.get("loaded") or {}).get(callsign)
+        data_name = rec["source"] if rec else f"ch0_{callsign}"
+        self.title(f"{self.base_title}  -  {callsign}  {data_name}")
+        self._set_busy(True, f"Running pipeline for {callsign}  |  {data_name}  |  UT {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}")
         self.btn_cancel.configure(state="normal")
         threading.Thread(
             target=self._pipeline_worker,
@@ -1098,8 +1173,12 @@ class App(tk.Tk):
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+        self.flagged = None
         for line in self.proc.stdout:
-            self.log(line.rstrip("\n"))
+            line = line.rstrip("\n")
+            self.log(line)
+            if self.flagged is None and any(m in line for m in FAIL_MARKERS):
+                self.flagged = line.strip()
         rc = self.proc.wait()
         self.proc = None
         return rc
@@ -1124,6 +1203,10 @@ class App(tk.Tk):
                     self.log(f"  {f}")
 
         total_start = datetime.now()
+        self.log("=" * 60)
+        self.log(self.run_data_text)
+        self.log(f"Config: {cfg}   UT: {timestamp}   Steps: {', '.join(steps)}")
+        self.log("=" * 60)
         outcome, detail = "ok", ""
         needs_db = use_db and any(k in steps for k in ("synthspec", "spectrogram"))
         try:
@@ -1166,6 +1249,11 @@ class App(tk.Tk):
                     self.post(lambda k=key, e=el, r=rc: self._tree_set(k, f"Failed (exit {r})", e))
                     outcome, detail = "failed", f"{key} exited with code {rc}"
                     break
+                if self.flagged:
+                    self.log(f"ERROR: step '{key}' reported a problem although it exited normally: {self.flagged}")
+                    self.post(lambda k=key, e=el: self._tree_set(k, "Failed: database insert error", e))
+                    outcome, detail = "failed", f"{key}: {self.flagged}"
+                    break
                 if key == "pathfinder" and not os.path.isfile(csv_file):
                     csv_missing()
                     self.post(lambda k=key, e=el: self._tree_set(k, "Failed: no CSV produced", e))
@@ -1197,6 +1285,7 @@ class App(tk.Tk):
             status = f"Pipeline failed: {detail}"
             self.post(lambda: messagebox.showerror("Pipeline failed", detail))
         self.post(lambda: self.btn_cancel.configure(state="disabled"))
+        self.post(lambda: self.title(self.base_title))
         self.post(lambda: self._set_busy(False, status))
 
     # ---------- shutdown ----------
