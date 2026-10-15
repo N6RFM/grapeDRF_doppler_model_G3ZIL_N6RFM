@@ -151,6 +151,8 @@ python3 grape_gui.py
 
 or download the file yourself and use **Browse...** to point the window at it (PHaRLAP's `dat/iri2016/apf107.dat`).
 
+**One day short is handled for you.** If `apf107.dat` ends exactly one day before the date of your data (common, because the daily file lags), `grape_gui.py` and `drf_data_loader_apf107_check.py` add a row for the missing day using the previous day's values, keep the old file as `apf107.dat.bak`, and carry on. The window shows this in orange. Two or more days short still asks whether to download a fresh copy.
+
 ### "No 'ut = [...]' line in this config"
 
 The loader writes the dataset's UT into `config/<CALLSIGN>_config.ini`. A config for a station you have not loaded data for yet has no `ut` line. Select the data and press **Load selected data** first.
@@ -169,6 +171,26 @@ If you skip Pathfinder, the window refuses to run modefinder or synthspec for a 
 The spectrogram step reads `config/<callsign in the data>_config.ini`, so the callsign in the data must match a config file name. The window fills the callsign box from the data and warns you if that config does not exist.
 
 The frequency list is read with `h5py` in the Python named in the **Python (venv)** field, which is the Python that already has the Digital RF packages. If the list shows "unknown", load the data first, or check that Python can `import h5py`.
+
+### The station line says "Callsign not recorded in this data"
+
+Older GRAPE data (for example 2024 recordings) has no callsign or grid square in its metadata, only the frequency and the position. The window then shows the position and leaves the **Callsign** box alone, so type the callsign yourself. Newer data records the callsign and grid, and the box fills in automatically.
+
+### Sidescatter window: `KeyError: 'PYTHONPATH'` or "PYTHONPATH is not set"
+
+`SS_sidescatter.py` uses `PYTHONPATH` to find PyLap. Start `sidescatter_gui.py` (or `grape_gui.py`, which can open it) from a terminal where `PYTHONPATH` is set the way it is for `pathfinder.sh`, then use **Check setup**.
+
+### Sidescatter window: "northernmost station must be below 58 N" or "Northern Hemisphere"
+
+Upstream's sidescatter tools handle only the Northern Hemisphere and stations below 58 N. The window checks both grid squares before it starts. Check `tx_grid` and `rx_grid` in the config.
+
+### Sidescatter window: my config lost its comments
+
+The upstream scripts rewrite the whole config file when they save the path length, bearing and peak position, which drops comments. The window keeps the copy from before the run as `config/<CALL>_config.ini.bak`.
+
+### Sidescatter window: "No landing coordinates" or a missing picture
+
+The ray tracing step wrote nothing, so there is nothing to plot. Read the PyLap messages just above in the Output box. A missing `pylap` or an `apf107.dat` problem is the usual cause (see the apf107 entry above).
 
 ### Where are my results?
 
