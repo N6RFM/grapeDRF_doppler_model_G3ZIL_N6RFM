@@ -66,6 +66,20 @@ The meaning of these arguments is explained in the upstream README.
 - **No data is included.** GRAPE `OBS*.zip` files and extracted DRF folders are not in this repo. Put your zips in `data/library/`. Upstream's sample data zips are also not in this repo's current files, so get them from the upstream project if you want to follow its tutorial.
 - **Other upstream files are untouched**, including `pathfinder`, `synthspec.py`, `grape_fft_spectrogram.py` and the heuristics file.
 
+## Two-hop sidescatter window
+
+`sidescatter_gui.py` is a window for G3ZIL's two-hop sidescatter tools (`SS_sidescatter.sh`, `SS_sidescatter_plot.py`, `SS_animate.sh`). It reads and writes the same `config/<CALL>_config.ini` files as `grape_gui.py`, so a station set up for the Doppler work is ready here too. Open it with the **Two-hop sidescatter...** button in `grape_gui.py`, or on its own:
+
+```bash
+python3 sidescatter_gui.py
+```
+
+- Choose the config, check or change the inputs (UT, frequency, R12, hops, elevation range, the two grid squares, azimuth step, contour maximum), then **Run sidescatter** for one time, or choose **Animation over time** (total minutes and interval; needs `ffmpeg`).
+- Changed inputs are written back to the config, and the previous copy is kept as `<CALL>_config.ini.bak`. The scripts themselves write the path length, bearing and peak position back into the config; the window shows them.
+- Results are listed in the window (double-click to open): pictures in `output/plots/SS/<CALL>/`, data in `output/csv/SS/<CALL>/`.
+- The scripts need PyLap: start the window from a terminal where `PYTHONPATH` is set the way it is for `pathfinder.sh`. **Check setup** reports a missing `PYTHONPATH`, missing Python modules, or missing `ffmpeg`.
+- Upstream limits apply: Northern Hemisphere only, and the northernmost station must be below 58 N. The window checks this before it starts.
+
 ## Troubleshooting
 
 Problems I ran into while setting this up, with the fix for each. For anything about the model itself, see the upstream README.
