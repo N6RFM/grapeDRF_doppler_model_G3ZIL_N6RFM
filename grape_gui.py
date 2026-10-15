@@ -528,6 +528,7 @@ class App(tk.Tk):
         self.refresh_configs()
         self.refresh_apf107_status()
         self.refresh_ch()
+        self._update_last_button()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._poll)
         self.log(f"Project folder: {BASE_DIR}")
@@ -699,7 +700,9 @@ class App(tk.Tk):
         self.btn_run.pack(side="left")
         self.btn_cancel = ttk.Button(r4, text="Cancel", command=self.on_cancel, state="disabled")
         self.btn_cancel.pack(side="left", padx=6)
-        ttk.Button(r4, text="Open results folder (output/)", command=self.on_open_output).pack(side="left", padx=6)
+        self.btn_last = ttk.Button(r4, text="Show last results", command=self.on_show_last, state="disabled")
+        self.btn_last.pack(side="left", padx=6)
+        ttk.Button(r4, text="Open results folder (output/)", command=self.on_open_output).pack(side="left")
 
         # log: header row (label left, buttons right) above a dark console
         f4 = ttk.Frame(main)
@@ -1194,6 +1197,9 @@ class App(tk.Tk):
         for key, label in STEP_DEFS:
             self._tree_set(key, "Pending" if key in steps else "Skipped", "")
         self.cancel_flag.clear()
+        self.settings.pop("last_run", None)      # replaced by this run's results
+        save_settings(self.settings)
+        self._update_last_button()
         data_text, _warn = describe_data(callsign, (y, mo, d, h, mi), self.settings)
         self.run_data_text = data_text
         rec = (self.settings.get("loaded") or {}).get(callsign)
@@ -1213,7 +1219,27 @@ class App(tk.Tk):
         if not open_path(out):
             messagebox.showinfo("Results folder", f"Your results are in:\n{out}")
 
-    def show_results(self, title, headline, results, db_note):
+    def _finish_results(self, last, show):
+        """Remember this run's results (survives closing the window) and optionally show them."""
+        self.settings["last_run"] = last
+        save_settings(self.settings)
+        self._update_last_button()
+        if show:
+            self.on_show_last()
+
+    def _update_last_button(self):
+        has = bool((self.settings.get("last_run") or {}).get("results"))
+        self.btn_last.configure(state="normal" if has else "disabled")
+
+    def on_show_last(self):
+        last = self.settings.get("last_run")
+        if not last:
+            messagebox.showinfo("Last results", "No results to show yet. They appear after a run.")
+            return
+        self.show_results(last["title"], last["headline"], [(k, f) for k, f in last["results"]],
+                          last.get("db_note"), data=last.get("data"), when=last.get("when"))
+
+    def show_results(self, title, headline, results, db_note, data=None, when=None):
         """Dialog that says exactly where the results are; double-click a file to open it."""
         dlg = tk.Toplevel(self)
         dlg.title(title)
@@ -1221,6 +1247,10 @@ class App(tk.Tk):
         frm = ttk.Frame(dlg, padding=12)
         frm.pack(fill="both", expand=True)
         ttk.Label(frm, text=headline, font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        if when:
+            ttk.Label(frm, text=f"Run finished: {when}").pack(anchor="w", pady=(4, 0))
+        if data:
+            ttk.Label(frm, text=data, wraplength=620, justify="left").pack(anchor="w", pady=(4, 0))
         ttk.Label(frm, text=f"Project folder: {BASE_DIR}").pack(anchor="w", pady=(6, 0))
         if db_note:
             ttk.Label(frm, text=db_note, wraplength=620, justify="left").pack(anchor="w", pady=(6, 0))
@@ -1399,22 +1429,36 @@ class App(tk.Tk):
 
         total = fmt_elapsed((datetime.now() - total_start).total_seconds())
         self.log("-" * 40)
+        db_note = None
+        if use_db and "synthspec" in steps and any(k == "synthspec" for k, _f in results):
+            dbp, _src = ch_params()
+            db_note = (f"Synthetic spectra were written to the ClickHouse table "
+                       f"{dbp.get('database', 'psws')}.synth_spec (query it with clickhouse-client).")
+        when = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if outcome == "ok":
+            headline = f"Finished in {total}."
+            title_txt = "Pipeline complete"
+        elif outcome == "cancelled":
+            headline = f"Cancelled after {total}. Partial results:"
+            title_txt = "Pipeline cancelled"
+        else:
+            headline = f"FAILED after {total} ({detail}). Partial results:"
+            title_txt = "Pipeline failed"
+        last = dict(title=title_txt, headline=headline, results=results, db_note=db_note,
+                    data=self.run_data_text, when=when)
         if outcome == "ok":
             self.log(f"Pipeline complete. Total elapsed {total}")
             status = f"Pipeline complete ({total})"
-            dbp, _src = ch_params()
-            db_note = None
-            if use_db and "synthspec" in steps:
-                db_note = (f"Synthetic spectra were written to the ClickHouse table "
-                           f"{dbp.get('database', 'psws')}.synth_spec (query it with clickhouse-client).")
             self.log("RESULTS: files are under " + os.path.join(BASE_DIR, "output") + (f"   |   {db_note}" if db_note else ""))
-            self.post(lambda: self.show_results("Pipeline complete", f"Finished in {total}.", results, db_note))
+            self.post(lambda: self._finish_results(last, show=True))
         elif outcome == "cancelled":
             self.log("Pipeline cancelled.")
             status = "Cancelled"
+            self.post(lambda: self._finish_results(last, show=False))
         else:
             status = f"Pipeline failed: {detail}"
             self.post(lambda: messagebox.showerror("Pipeline failed", detail))
+            self.post(lambda: self._finish_results(last, show=False))
         self.post(lambda: self.btn_cancel.configure(state="disabled"))
         self.post(lambda: self.title(self.base_title))
         self.post(lambda: self._set_busy(False, status))
