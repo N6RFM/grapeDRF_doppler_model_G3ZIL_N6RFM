@@ -39,6 +39,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.request
@@ -468,6 +469,121 @@ def open_path(path):
         return False
 
 
+# ---------- dataset metadata and frequencies ----------
+META_SCRIPT = r"""
+import json, sys
+try:
+    import h5py
+except ImportError:
+    print(json.dumps({"error": "h5py is not installed in this Python (pip install h5py)"}))
+    sys.exit(0)
+try:
+    with h5py.File(sys.argv[1], "r") as f:
+        g = f[sorted(f.keys())[0]]
+        def val(name, default=""):
+            if name not in g:
+                return default
+            v = g[name][()]
+            return v.decode() if isinstance(v, bytes) else v
+        print(json.dumps({
+            "callsign": val("callsign"), "grid": val("grid_square"),
+            "lat": float(val("lat", 0.0)), "lon": float(val("long", 0.0)),
+            "receiver": val("receiver_name"),
+            "freqs": [round(float(x), 6) for x in g["center_frequencies"][()].ravel()],
+        }))
+except Exception as e:
+    print(json.dumps({"error": type(e).__name__ + ": " + str(e)}))
+"""
+
+META_RE = re.compile(r"(^|/)metadata/[^/]+/metadata@[^/]+\.h5$")
+FREQ_LINE = re.compile(r"^\s*freq\s*=")
+
+
+def read_metadata(py, h5_path):
+    """Station details from a DRF metadata file, read with the pipeline's own Python (h5py)."""
+    try:
+        r = subprocess.run([py, "-c", META_SCRIPT, h5_path], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"error": str(e)}
+    lines = [l for l in r.stdout.splitlines() if l.strip().startswith("{")]
+    if not lines:
+        tail = (r.stderr.strip().splitlines() or ["no output"])[-1]
+        return {"error": tail}
+    return json.loads(lines[-1])
+
+
+def find_metadata_file(root):
+    hits = []
+    for dp, _dn, fn in os.walk(root):
+        for f in fn:
+            if f.startswith("metadata@") and f.endswith(".h5"):
+                hits.append(os.path.join(dp, f))
+    return sorted(hits)[0] if hits else None
+
+
+def dataset_meta(py, kind, path):
+    """kind 'zip' (peek inside, nothing else is extracted) or 'dir' (an extracted dataset)."""
+    if kind == "zip":
+        with zipfile.ZipFile(path) as zf:
+            names = sorted(n for n in zf.namelist() if META_RE.search(n))
+            if not names:
+                return {"error": "no metadata file inside this zip"}
+            tmp = tempfile.mkdtemp(prefix="grape_meta_")
+            try:
+                target = os.path.join(tmp, "meta.h5")
+                with open(target, "wb") as out:
+                    out.write(zf.read(names[0]))
+                return read_metadata(py, target)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+    found = find_metadata_file(path)
+    return read_metadata(py, found) if found else {"error": "no metadata file in this folder"}
+
+
+def fmt_freq(f):
+    return f"{f:g}"
+
+
+def freq_index(freqs, f):
+    for i, x in enumerate(freqs):
+        if abs(x - f) < 1e-6:
+            return i
+    raise ValueError(f"{fmt_freq(f)} MHz is not in this dataset's frequency list")
+
+
+def read_cfg_freq(path):
+    with open(path) as fh:
+        for line in fh:
+            if FREQ_LINE.match(line):
+                return float(line.split("=", 1)[1].split("#")[0].strip())
+    return None
+
+
+def replace_cfg_freq(path, f):
+    """Set 'freq = <f>' in a config and return the original line so it can be restored."""
+    with open(path) as fh:
+        lines = fh.readlines()
+    for i, line in enumerate(lines):
+        if FREQ_LINE.match(line):
+            old = line
+            lines[i] = f"freq = {fmt_freq(f)}\n"
+            with open(path, "w") as fh:
+                fh.writelines(lines)
+            return old
+    raise ValueError(f"No 'freq = ...' line in {path}")
+
+
+def restore_cfg_line(path, old_line):
+    with open(path) as fh:
+        lines = fh.readlines()
+    for i, line in enumerate(lines):
+        if FREQ_LINE.match(line):
+            lines[i] = old_line if old_line.endswith("\n") else old_line + "\n"
+            with open(path, "w") as fh:
+                fh.writelines(lines)
+            return
+
+
 def detect_python():
     """Interpreter for the pipeline steps: saved choice, GRAPE_PYTHON, a venv in the
     project (venv/.venv/env), the venv this GUI runs in, else this interpreter."""
@@ -518,6 +634,10 @@ class App(tk.Tk):
         self.sources = []
         self.py_path = sys.executable
         self.ch_auto = self.ch_stop = True
+        self._meta_token = 0
+        self._freq_token = 0
+        self.freq_list = []
+        self.freq_vars = {}
         self.flagged = None
         self.run_data_text = ""
         self.ch_op = False
@@ -585,7 +705,7 @@ class App(tk.Tk):
         self.src_list.configure(yscrollcommand=sb.set)
         self.src_list.pack(side="left", fill="both", expand=True)
         sb.pack(side="left", fill="y")
-        self.src_list.bind("<<ListboxSelect>>", lambda e: self.refresh_apf107_status())
+        self.src_list.bind("<<ListboxSelect>>", lambda e: (self.refresh_apf107_status(), self.on_source_selected()))
 
         rf = ttk.Frame(f1)
         rf.pack(fill="x", pady=(6, 0))
@@ -598,6 +718,10 @@ class App(tk.Tk):
             rf, text="Load selected data  (extract, set UT in config, copy)", command=self.on_load
         )
         self.btn_load.pack(side="right")
+        self.src_meta_var = tk.StringVar(value="")
+        self.src_meta_label = ttk.Label(f1, textvariable=self.src_meta_var, wraplength=960, justify="left",
+                                        font=("TkDefaultFont", 10, "bold"))
+        self.src_meta_label.pack(fill="x", pady=(6, 0))
 
         # 2. indices
         f2 = ttk.LabelFrame(main, text="2. Solar / geomagnetic indices  (apf107.dat)", padding=6)
@@ -638,11 +762,18 @@ class App(tk.Tk):
         ttk.Label(r2, text="Pathfinder arg:").pack(side="left")
         self.pf_var = tk.StringVar(value=self.settings.get("pathfinder_arg", "1400"))
         ttk.Entry(r2, textvariable=self.pf_var, width=7).pack(side="left", padx=4)
-        ttk.Label(r2, text="Spectrogram args:").pack(side="left", padx=(12, 0))
-        self.spec_var = tk.StringVar(value=self.settings.get("spec_args", "0 0 24"))
-        ttk.Entry(r2, textvariable=self.spec_var, width=10).pack(side="left", padx=4)
+        ttk.Label(r2, text="Spectrogram hours (start stop):").pack(side="left", padx=(12, 0))
+        legacy = (self.settings.get("spec_args") or "0 0 24").split()
+        self.spec_var = tk.StringVar(value=self.settings.get("spec_hours") or " ".join(legacy[-2:]))
+        ttk.Entry(r2, textvariable=self.spec_var, width=8).pack(side="left", padx=4)
         self.db_var = tk.BooleanVar(value=self.settings.get("db", True))
         ttk.Checkbutton(r2, text="Use ClickHouse DB (DB flag)", variable=self.db_var).pack(side="left", padx=12)
+
+        rfq = ttk.Frame(f3)
+        rfq.pack(fill="x", pady=(6, 0))
+        ttk.Label(rfq, text="Frequencies (MHz):").pack(side="left")
+        self.freq_box = ttk.Frame(rfq)
+        self.freq_box.pack(side="left", padx=6, fill="x", expand=True)
 
         self.data_var = tk.StringVar()
         self.data_label = ttk.Label(f3, textvariable=self.data_var, font=("TkDefaultFont", 10, "bold"),
@@ -1120,6 +1251,121 @@ class App(tk.Tk):
         if path:
             self.py_var.set(path)
 
+    # ---------- station details and frequencies ----------
+    def on_source_selected(self):
+        src = self._selected_source()
+        if not src:
+            self.src_meta_var.set("")
+            return
+        stype, name = src
+        py = self.py_var.get().strip()
+        path = os.path.join(LIBRARY_DIR, name)
+        kind = "zip" if stype == "zip" else "dir"
+        self.src_meta_var.set("Reading station details ...")
+        self.src_meta_label.configure(foreground="gray40")
+        self._meta_token += 1
+        token = self._meta_token
+
+        def worker():
+            try:
+                meta = dataset_meta(py, kind, path)
+            except Exception as e:
+                meta = {"error": str(e)}
+            self.post(lambda: self._show_source_meta(token, meta))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _show_source_meta(self, token, meta):
+        if token != self._meta_token:
+            return                       # the selection has moved on
+        if "error" in meta:
+            self.src_meta_var.set(f"Station details unavailable: {meta['error']}")
+            self.src_meta_label.configure(foreground="gray40")
+            return
+        call = str(meta.get("callsign", "")).upper()
+        freqs = meta["freqs"]
+        text = (f"Station {call} ({meta.get('grid', '')}), {len(freqs)} frequenc{'y' if len(freqs) == 1 else 'ies'}: "
+                + ", ".join(fmt_freq(f) for f in freqs) + " MHz")
+        warn = False
+        typed = self.callsign_var.get().strip().upper()
+        if call and call != typed:
+            self.callsign_var.set(call)
+            text += (f".   Callsign box changed from {typed or '(empty)'} to {call}: the spectrogram step reads "
+                     f"config/{call}_config.ini.")
+            warn = True
+        if call and not os.path.isfile(os.path.join(CONFIG_DIR, f"{call}_config.ini")):
+            text += f"   WARNING: config/{call}_config.ini does not exist yet - copy an existing config to that name and edit it."
+            warn = True
+        self.src_meta_var.set(text)
+        self.src_meta_label.configure(foreground="#b36b00" if warn else "#1a5fb4")
+
+    def refresh_freqs(self):
+        """Read the frequencies of the dataset in the working folder and offer them as checkboxes."""
+        cfg = self.config_var.get()
+        callsign = cfg.split("_")[0] if cfg else ""
+        py = self.py_var.get().strip()
+        cfg_freq = None
+        try:
+            if cfg:
+                cfg_freq = read_cfg_freq(os.path.join(CONFIG_DIR, cfg))
+        except Exception:
+            pass
+        self._freq_token += 1
+        token = self._freq_token
+
+        def worker():
+            meta = None
+            root = os.path.join(DATA_ROOT, f"ch0_{callsign}")
+            if callsign and os.path.isdir(root):
+                found = find_metadata_file(root)
+                if found:
+                    meta = read_metadata(py, found)
+            self.post(lambda: self._build_freq_widgets(token, callsign, cfg_freq, meta))
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _build_freq_widgets(self, token, callsign, cfg_freq, meta):
+        if token != self._freq_token:
+            return
+        for w in self.freq_box.winfo_children():
+            w.destroy()
+        self.freq_vars = {}
+        self.freq_list = []
+        if not meta or "error" in meta:
+            why = (meta or {}).get("error", f"no data loaded for {callsign}" if callsign else "no config selected")
+            now = f"the config's own value, {fmt_freq(cfg_freq)} MHz" if cfg_freq is not None else "the config's own value"
+            ttk.Label(self.freq_box, text=f"(unknown: {why}.  The run will use {now}.)").pack(side="left")
+            return
+        self.freq_list = list(meta["freqs"])
+        saved = (self.settings.get("freq_sel") or {}).get(callsign)
+        if saved:
+            chosen = {f for f in self.freq_list if any(abs(f - x) < 1e-6 for x in saved)}
+        else:
+            chosen = {f for f in self.freq_list if cfg_freq is not None and abs(f - cfg_freq) < 1e-6}
+        if not chosen:
+            chosen = {self.freq_list[0]}
+        all_var = tk.BooleanVar(value=len(chosen) == len(self.freq_list))
+
+        def on_all():
+            for v in self.freq_vars.values():
+                v.set(all_var.get())
+
+        def on_one():
+            all_var.set(all(v.get() for v in self.freq_vars.values()))
+
+        if len(self.freq_list) > 1:
+            ttk.Checkbutton(self.freq_box, text="All", variable=all_var, command=on_all).pack(side="left", padx=(0, 8))
+        for f in self.freq_list:
+            var = tk.BooleanVar(value=f in chosen)
+            self.freq_vars[f] = var
+            ttk.Checkbutton(self.freq_box, text=fmt_freq(f), variable=var, command=on_one).pack(side="left", padx=3)
+        note = f"   ({len(self.freq_list)} in this data"
+        if cfg_freq is not None and not any(abs(f - cfg_freq) < 1e-6 for f in self.freq_list):
+            note += f"; the config's freq = {fmt_freq(cfg_freq)} is not one of them"
+        ttk.Label(self.freq_box, text=note + ")").pack(side="left", padx=6)
+
+    def _record_pf(self, key, freq):
+        self.settings.setdefault("pathfinder_freq", {})[key] = freq
+        save_settings(self.settings)
+
     def refresh_data_banner(self):
         cfg = self.config_var.get()
         if not cfg:
@@ -1137,6 +1383,7 @@ class App(tk.Tk):
     def refresh_ut(self):
         cfg = self.config_var.get()
         self.refresh_data_banner()
+        self.refresh_freqs()
         if not cfg:
             self.ut_var.set("No config files found")
             return
@@ -1164,6 +1411,36 @@ class App(tk.Tk):
         if not steps:
             messagebox.showwarning("Steps", "Tick at least one step.")
             return
+        hours = self.spec_var.get().split()
+        if len(hours) != 2 or not all(h_.lstrip("-").replace(".", "", 1).isdigit() for h_ in hours):
+            messagebox.showwarning("Spectrogram hours", "Enter the start and stop hour, for example:  0 24")
+            return
+        if self.freq_list:
+            freqs = sorted(f for f, v in self.freq_vars.items() if v.get())
+            if not freqs:
+                messagebox.showwarning("Frequencies", "Tick at least one frequency.")
+                return
+        else:
+            freqs = [None]               # list unknown: run with the config's own frequency (index 0)
+        freq_list = list(self.freq_list)
+        pf_key = f"{callsign}_{timestamp}"
+        if freqs != [None] and "pathfinder" not in steps and any(k in steps for k in ("modefinder", "synthspec")):
+            rec = (self.settings.get("pathfinder_freq") or {}).get(pf_key)
+            if rec is not None:
+                wrong = [f for f in freqs if abs(rec - f) > 1e-6]
+                if wrong:
+                    messagebox.showerror(
+                        "Pathfinder was run for another frequency",
+                        f"The pathfinder output on disk for this run was computed for {fmt_freq(rec)} MHz, so "
+                        f"modefinder/synthspec would give wrong results for {', '.join(fmt_freq(f) for f in wrong)} MHz.\n\n"
+                        f"Tick Pathfinder (it runs once per frequency), or select only {fmt_freq(rec)} MHz.")
+                    return
+            elif not messagebox.askyesno(
+                    "Pathfinder frequency unknown",
+                    "This window does not know which frequency the existing pathfinder output was computed for "
+                    "(it was run before this was tracked).\n\nModefinder/synthspec will assume it is the "
+                    "frequency you selected. Continue?"):
+                return
         use_db = self.db_var.get()
         if use_db and not os.environ.get("CLICKHOUSE_PASSWORD"):
             if not messagebox.askyesno(
@@ -1172,9 +1449,15 @@ class App(tk.Tk):
                 "so the DB steps will likely fail to log in.\n\nContinue anyway?",
             ):
                 return
+        freq_txt = ("config frequency" if freqs == [None]
+                    else ", ".join(fmt_freq(f) for f in freqs) + " MHz")
+        extra = ""
+        if len(freqs) > 1:
+            extra = (f"\n\nThe steps run once for each of the {len(freqs)} frequencies"
+                     + (" (pathfinder ray tracing included each time, so this takes a while)." if "pathfinder" in steps else "."))
         if not messagebox.askyesno(
             "Confirm",
-            f"Run {', '.join(steps)}\nconfig: {cfg}\nUT: {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}  ({timestamp})\n\nProceed?",
+            f"Run {', '.join(steps)}\nconfig: {cfg}\nUT: {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}  ({timestamp})\nfrequencies: {freq_txt}{extra}\n\nProceed?",
         ):
             return
 
@@ -1186,11 +1469,12 @@ class App(tk.Tk):
         self.settings["python"] = py
 
         pf_arg = self.pf_var.get().strip() or "1400"
-        spec_args = self.spec_var.get().split() or ["0", "0", "24"]
         self.settings.update(
-            config=cfg, pathfinder_arg=pf_arg, spec_args=" ".join(spec_args), db=use_db, steps=steps,
+            config=cfg, pathfinder_arg=pf_arg, spec_hours=" ".join(hours), db=use_db, steps=steps,
             ch_auto_start=self.ch_auto_var.get(), ch_stop_after=self.ch_stop_var.get(),
         )
+        if freqs != [None]:
+            self.settings.setdefault("freq_sel", {})[callsign] = freqs
         save_settings(self.settings)
         # snapshot Tk variables here; worker threads must not touch Tk
         self.ch_auto, self.ch_stop = self.ch_auto_var.get(), self.ch_stop_var.get()
@@ -1210,7 +1494,7 @@ class App(tk.Tk):
         self.btn_cancel.configure(state="normal")
         threading.Thread(
             target=self._pipeline_worker,
-            args=(cfg, callsign, timestamp, steps, pf_arg, spec_args, use_db),
+            args=(cfg, callsign, timestamp, steps, pf_arg, hours, use_db, freqs, freq_list),
             daemon=True,
         ).start()
 
@@ -1329,17 +1613,15 @@ class App(tk.Tk):
         self.proc = None
         return rc
 
-    def _pipeline_worker(self, cfg, callsign, timestamp, steps, pf_arg, spec_args, use_db):
+    def _pipeline_worker(self, cfg, callsign, timestamp, steps, pf_arg, hours, use_db, freqs, freq_list):
         py = self.py_path
+        cfg_path = os.path.join(CONFIG_DIR, cfg)
         csv_dir = os.path.join(CSV_OUTPUT_BASE, callsign)
         csv_file = os.path.join(csv_dir, f"{timestamp}_pathfinder.csv")
+        pf_key = f"{callsign}_{timestamp}"
         db = ["DB"] if use_db else []
-        cmds = {
-            "pathfinder": ["bash", "./pathfinder.sh", cfg, pf_arg],
-            "modefinder": [py, "modefinder_quiet.py", callsign, timestamp],
-            "synthspec": [py, "synthspec_ch_quiet.py", callsign, timestamp] + db,
-            "spectrogram": [py, "grape_fft_spectrogram_ch_quiet.py", f"ch0_{callsign}"] + spec_args + db,
-        }
+        multi = len(freqs) > 1
+        archive_root = os.path.join(BASE_DIR, "output", "by_frequency", f"{callsign}_{timestamp}")
 
         def csv_missing():
             self.log(f"ERROR: expected pathfinder output not found:\n  {csv_file}")
@@ -1349,17 +1631,74 @@ class App(tk.Tk):
                     self.log(f"  {f}")
 
         total_start = datetime.now()
+        freq_txt = "config frequency" if freqs == [None] else ", ".join(fmt_freq(f) for f in freqs) + " MHz"
         self.log("=" * 60)
         self.log(self.run_data_text)
-        self.log(f"Config: {cfg}   UT: {timestamp}   Steps: {', '.join(steps)}")
+        self.log(f"Config: {cfg}   UT: {timestamp}   Steps: {', '.join(steps)}   Frequencies: {freq_txt}")
         self.log("=" * 60)
         outcome, detail = "ok", ""
         needs_db = use_db and any(k in steps for k in ("synthspec", "spectrogram"))
-        results = []     # [(step, [relative paths])]
+        results = []     # [(label, [relative paths])]
+        orig_line = None
+
+        def run_steps(f, idx, label):
+            """The selected steps for one frequency. Returns (outcome, detail, [(label, files)])."""
+            cmds = {
+                "pathfinder": ["bash", "./pathfinder.sh", cfg, pf_arg],
+                "modefinder": [py, "modefinder_quiet.py", callsign, timestamp],
+                "synthspec": [py, "synthspec_ch_quiet.py", callsign, timestamp] + db,
+                "spectrogram": [py, "grape_fft_spectrogram_ch_quiet.py", f"ch0_{callsign}", str(idx)] + hours + db,
+            }
+            found = []
+            for key in [k for k, _ in STEP_DEFS if k in steps]:
+                if self.cancel_flag.is_set():
+                    return "cancelled", "", found
+                if key == "modefinder" and not os.path.isfile(csv_file):
+                    csv_missing()
+                    self.post(lambda k=key: self._tree_set(k, "Failed: pathfinder output missing", ""))
+                    return "failed", "pathfinder output not found", found
+
+                self.post(lambda k=key: self._tree_set(k, "Running ...", ""))
+                self.log("-" * 40)
+                self.log(f"Starting: {key}" + (f"  ({label})" if label else ""))
+                t0 = datetime.now()
+                before = snapshot_files()
+                rc = self._run_cmd(cmds[key])
+                el = fmt_elapsed((datetime.now() - t0).total_seconds())
+                step_files = changed_files(before, snapshot_files())
+                if step_files:
+                    found.append((f"{label} {key}".strip(), step_files))
+                    self.log(f"Files written by {key}:")
+                    for rel in step_files[:12]:
+                        self.log(f"   {rel}")
+                    if len(step_files) > 12:
+                        self.log(f"   ... and {len(step_files) - 12} more")
+
+                if self.cancel_flag.is_set():
+                    self.post(lambda k=key, e=el: self._tree_set(k, "Cancelled", e))
+                    return "cancelled", "", found
+                if rc != 0:
+                    self.log(f"ERROR: step '{key}' failed (exit code {rc})")
+                    self.post(lambda k=key, e=el, r=rc: self._tree_set(k, f"Failed (exit {r})", e))
+                    return "failed", f"{key} exited with code {rc}", found
+                if self.flagged:
+                    self.log(f"ERROR: step '{key}' reported a problem although it exited normally: {self.flagged}")
+                    self.post(lambda k=key, e=el: self._tree_set(k, "Failed: database insert error", e))
+                    return "failed", f"{key}: {self.flagged}", found
+                if key == "pathfinder" and not os.path.isfile(csv_file):
+                    csv_missing()
+                    self.post(lambda k=key, e=el: self._tree_set(k, "Failed: no CSV produced", e))
+                    return "failed", "pathfinder produced no CSV", found
+                if key == "pathfinder" and f is not None:
+                    self.post(lambda ff=f: self._record_pf(pf_key, ff))
+                self.log(f"Finished: {key} (Elapsed: {el})")
+                self.post(lambda k=key, e=el: self._tree_set(k, "Done", e))
+            return "ok", "", found
+
         try:
             if needs_db and not ch_running():
                 if not self.ch_auto:
-                    raise RuntimeError("ClickHouse is not running. Click Start (or tick 'Start automatically').")
+                    raise RuntimeError("ClickHouse is not running. Click Start (or tick 'Auto-start if needed').")
                 self.log("ClickHouse is not running - starting it ...")
                 self.post(lambda: self.status_var.set("Starting ClickHouse ..."))
                 if not ch_service("start", self.log):
@@ -1370,56 +1709,59 @@ class App(tk.Tk):
                 # fail now, not after an hour of ray tracing
                 if not ch_check(py, self.log):
                     raise RuntimeError("ClickHouse check failed (see Output). Nothing was run.")
-            for key in [k for k, _ in STEP_DEFS if k in steps]:
+
+            for n, f in enumerate(freqs, 1):
                 if self.cancel_flag.is_set():
                     outcome = "cancelled"
                     break
-                if key == "modefinder" and not os.path.isfile(csv_file):
-                    csv_missing()
-                    self.post(lambda k=key: self._tree_set(k, "Failed: pathfinder output missing", ""))
-                    outcome, detail = "failed", "pathfinder output not found"
+                if f is not None:
+                    old = replace_cfg_freq(cfg_path, f)
+                    if orig_line is None:
+                        orig_line = old
+                    idx = freq_index(freq_list, f)
+                    label = f"{fmt_freq(f)} MHz"
+                else:
+                    idx, label = 0, ""
+                if multi:
+                    self.log("#" * 60)
+                    self.log(f"FREQUENCY {n} of {len(freqs)}: {label}   (config freq set, spectrogram index {idx})")
+                    self.log("#" * 60)
+                    self.post(lambda n=n, lb=label: self.status_var.set(
+                        f"Frequency {n} of {len(freqs)}: {lb}  |  {callsign}  |  UT {timestamp}"))
+                    for key, _lbl in STEP_DEFS:
+                        self.post(lambda k=key: self._tree_set(k, "Pending" if k in steps else "Skipped", ""))
+                pass_before = snapshot_files()
+                out, det, found = run_steps(f, idx, label if multi else "")
+                if multi and f is not None:
+                    # the CSVs and plots of the next frequency overwrite these, so keep a copy
+                    dest = os.path.join(archive_root, f"{fmt_freq(f)}MHz")
+                    copies = []
+                    for rel in changed_files(pass_before, snapshot_files()):
+                        src = os.path.join(BASE_DIR, rel)
+                        os.makedirs(dest, exist_ok=True)
+                        name = os.path.basename(rel)
+                        if os.path.exists(os.path.join(dest, name)):
+                            name = os.path.basename(os.path.dirname(rel)) + "_" + name
+                        shutil.copy2(src, os.path.join(dest, name))
+                        copies.append(os.path.relpath(os.path.join(dest, name), BASE_DIR))
+                    if copies:
+                        self.log(f"Saved a copy of the {label} files in {os.path.relpath(dest, BASE_DIR)}")
+                        results.append((label, copies))
+                else:
+                    results.extend(found)
+                if out != "ok":
+                    outcome, detail = out, det
                     break
-
-                self.post(lambda k=key: self._tree_set(k, "Running ...", ""))
-                self.log("-" * 40)
-                self.log(f"Starting: {key}")
-                t0 = datetime.now()
-                before = snapshot_files()
-                rc = self._run_cmd(cmds[key])
-                el = fmt_elapsed((datetime.now() - t0).total_seconds())
-                step_files = changed_files(before, snapshot_files())
-                if step_files:
-                    results.append((key, step_files))
-                    self.log(f"Files written by {key}:")
-                    for rel in step_files[:12]:
-                        self.log(f"   {rel}")
-                    if len(step_files) > 12:
-                        self.log(f"   ... and {len(step_files) - 12} more")
-
-                if self.cancel_flag.is_set():
-                    self.post(lambda k=key, e=el: self._tree_set(k, "Cancelled", e))
-                    outcome = "cancelled"
-                    break
-                if rc != 0:
-                    self.log(f"ERROR: step '{key}' failed (exit code {rc})")
-                    self.post(lambda k=key, e=el, r=rc: self._tree_set(k, f"Failed (exit {r})", e))
-                    outcome, detail = "failed", f"{key} exited with code {rc}"
-                    break
-                if self.flagged:
-                    self.log(f"ERROR: step '{key}' reported a problem although it exited normally: {self.flagged}")
-                    self.post(lambda k=key, e=el: self._tree_set(k, "Failed: database insert error", e))
-                    outcome, detail = "failed", f"{key}: {self.flagged}"
-                    break
-                if key == "pathfinder" and not os.path.isfile(csv_file):
-                    csv_missing()
-                    self.post(lambda k=key, e=el: self._tree_set(k, "Failed: no CSV produced", e))
-                    outcome, detail = "failed", "pathfinder produced no CSV"
-                    break
-                self.log(f"Finished: {key} (Elapsed: {el})")
-                self.post(lambda k=key, e=el: self._tree_set(k, "Done", e))
         except Exception as e:
             outcome, detail = "failed", str(e)
             self.log(f"ERROR: {e}")
+        finally:
+            if orig_line is not None:
+                try:
+                    restore_cfg_line(cfg_path, orig_line)
+                    self.log(f"Config freq restored to: {orig_line.strip()}")
+                except OSError as e:
+                    self.log(f"WARNING: could not restore the config's freq line: {e}")
 
         if self.ch_started_by_gui and self.ch_stop:
             self.log("Stopping ClickHouse (it was started by this window) ...")
@@ -1431,10 +1773,14 @@ class App(tk.Tk):
         total = fmt_elapsed((datetime.now() - total_start).total_seconds())
         self.log("-" * 40)
         db_note = None
-        if use_db and "synthspec" in steps and any(k == "synthspec" for k, _f in results):
+        if use_db and "synthspec" in steps and any("synthspec" in k or k.endswith("MHz") for k, _f in results):
             dbp, _src = ch_params()
             db_note = (f"Synthetic spectra were written to the ClickHouse table "
                        f"{dbp.get('database', 'psws')}.synth_spec (query it with clickhouse-client).")
+        if multi:
+            note = ("Each frequency's files are copied under output/by_frequency/. The files directly in "
+                    "output/ belong to the last frequency run.")
+            db_note = (db_note + "  " if db_note else "") + note
         when = datetime.now().strftime("%Y-%m-%d %H:%M")
         if outcome == "ok":
             headline = f"Finished in {total}."
