@@ -429,6 +429,45 @@ def describe_data(callsign, ut, settings):
     return ("Data: not loaded through this window; source unknown", True)
 
 
+SCAN_SKIP = {".git", "data", "venv", ".venv", "env", "__pycache__", "node_modules"}
+
+
+def snapshot_files():
+    """{relative path: (mtime, size)} for project files, skipping data/, venvs and .git."""
+    snap = {}
+    for root, dirs, files in os.walk(BASE_DIR):
+        dirs[:] = [d for d in dirs if d not in SCAN_SKIP]
+        for f in files:
+            if f == os.path.basename(SETTINGS_FILE) or f.endswith((".pyc", ".tmp")):
+                continue
+            full = os.path.join(root, f)
+            try:
+                st = os.stat(full)
+                snap[os.path.relpath(full, BASE_DIR)] = (st.st_mtime_ns, st.st_size)
+            except OSError:
+                pass
+    return snap
+
+
+def changed_files(before, after):
+    """Files that are new or were rewritten between two snapshots."""
+    return sorted(rel for rel, sig in after.items() if before.get(rel) != sig)
+
+
+def open_path(path):
+    """Open a file or folder with the desktop's default application."""
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)            # noqa: F821
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True
+    except Exception:
+        return False
+
+
 def detect_python():
     """Interpreter for the pipeline steps: saved choice, GRAPE_PYTHON, a venv in the
     project (venv/.venv/env), the venv this GUI runs in, else this interpreter."""
@@ -660,6 +699,7 @@ class App(tk.Tk):
         self.btn_run.pack(side="left")
         self.btn_cancel = ttk.Button(r4, text="Cancel", command=self.on_cancel, state="disabled")
         self.btn_cancel.pack(side="left", padx=6)
+        ttk.Button(r4, text="Open results folder (output/)", command=self.on_open_output).pack(side="left", padx=6)
 
         # log: header row (label left, buttons right) above a dark console
         f4 = ttk.Frame(main)
@@ -1167,6 +1207,55 @@ class App(tk.Tk):
             daemon=True,
         ).start()
 
+    def on_open_output(self):
+        out = os.path.join(BASE_DIR, "output")
+        os.makedirs(out, exist_ok=True)
+        if not open_path(out):
+            messagebox.showinfo("Results folder", f"Your results are in:\n{out}")
+
+    def show_results(self, title, headline, results, db_note):
+        """Dialog that says exactly where the results are; double-click a file to open it."""
+        dlg = tk.Toplevel(self)
+        dlg.title(title)
+        dlg.transient(self)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, text=headline, font=("TkDefaultFont", 11, "bold")).pack(anchor="w")
+        ttk.Label(frm, text=f"Project folder: {BASE_DIR}").pack(anchor="w", pady=(6, 0))
+        if db_note:
+            ttk.Label(frm, text=db_note, wraplength=620, justify="left").pack(anchor="w", pady=(6, 0))
+        paths = [(step, rel) for step, files in results for rel in files]
+        if paths:
+            ttk.Label(frm, text="Files written by this run (double-click to open):").pack(anchor="w", pady=(10, 2))
+            lf = ttk.Frame(frm)
+            lf.pack(fill="both", expand=True)
+            lb = tk.Listbox(lf, height=min(max(len(paths), 4), 14), width=90, exportselection=False)
+            sb = ttk.Scrollbar(lf, orient="vertical", command=lb.yview)
+            lb.configure(yscrollcommand=sb.set)
+            lb.pack(side="left", fill="both", expand=True)
+            sb.pack(side="left", fill="y")
+            for step, rel in paths:
+                lb.insert("end", f"[{step}]  {rel}")
+
+            def open_sel(_e=None):
+                sel = lb.curselection()
+                if sel:
+                    full = os.path.join(BASE_DIR, paths[sel[0]][1])
+                    if not open_path(full):
+                        messagebox.showinfo("Open", f"Could not open it automatically:\n{full}", parent=dlg)
+            lb.bind("<Double-Button-1>", open_sel)
+        else:
+            ttk.Label(frm, text="No new files were found in the project folder. Check the Output log.").pack(anchor="w", pady=(10, 0))
+            open_sel = None
+        bf = ttk.Frame(frm)
+        bf.pack(fill="x", pady=(10, 0))
+        ttk.Button(bf, text="Close", command=dlg.destroy).pack(side="right")
+        ttk.Button(bf, text="Open results folder", command=self.on_open_output).pack(side="right", padx=6)
+        if open_sel:
+            ttk.Button(bf, text="Open selected file", command=open_sel).pack(side="right")
+        dlg.update_idletasks()
+        dlg.lift()
+
     def on_cancel(self):
         self.cancel_flag.set()
         self._kill_proc()
@@ -1235,6 +1324,7 @@ class App(tk.Tk):
         self.log("=" * 60)
         outcome, detail = "ok", ""
         needs_db = use_db and any(k in steps for k in ("synthspec", "spectrogram"))
+        results = []     # [(step, [relative paths])]
         try:
             if needs_db and not ch_running():
                 if not self.ch_auto:
@@ -1263,8 +1353,17 @@ class App(tk.Tk):
                 self.log("-" * 40)
                 self.log(f"Starting: {key}")
                 t0 = datetime.now()
+                before = snapshot_files()
                 rc = self._run_cmd(cmds[key])
                 el = fmt_elapsed((datetime.now() - t0).total_seconds())
+                step_files = changed_files(before, snapshot_files())
+                if step_files:
+                    results.append((key, step_files))
+                    self.log(f"Files written by {key}:")
+                    for rel in step_files[:12]:
+                        self.log(f"   {rel}")
+                    if len(step_files) > 12:
+                        self.log(f"   ... and {len(step_files) - 12} more")
 
                 if self.cancel_flag.is_set():
                     self.post(lambda k=key, e=el: self._tree_set(k, "Cancelled", e))
@@ -1303,7 +1402,13 @@ class App(tk.Tk):
         if outcome == "ok":
             self.log(f"Pipeline complete. Total elapsed {total}")
             status = f"Pipeline complete ({total})"
-            self.post(lambda: messagebox.showinfo("Pipeline complete", f"Finished in {total}."))
+            dbp, _src = ch_params()
+            db_note = None
+            if use_db and "synthspec" in steps:
+                db_note = (f"Synthetic spectra were written to the ClickHouse table "
+                           f"{dbp.get('database', 'psws')}.synth_spec (query it with clickhouse-client).")
+            self.log("RESULTS: files are under " + os.path.join(BASE_DIR, "output") + (f"   |   {db_note}" if db_note else ""))
+            self.post(lambda: self.show_results("Pipeline complete", f"Finished in {total}.", results, db_note))
         elif outcome == "cancelled":
             self.log("Pipeline cancelled.")
             status = "Cancelled"
