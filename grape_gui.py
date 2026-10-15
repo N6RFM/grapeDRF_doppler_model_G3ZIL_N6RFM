@@ -26,6 +26,7 @@ starting the GUI:   export CLICKHOUSE_PASSWORD='...'
 Dependencies: Python standard library only (tkinter included).
 """
 
+import ast
 import json
 import os
 import queue
@@ -35,6 +36,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import zipfile
 from datetime import date, datetime
@@ -252,6 +254,130 @@ def copy_data(folder_name, callsign, log):
     return dest
 
 
+CH_SERVICE = os.environ.get("CLICKHOUSE_SERVICE", "clickhouse-server")
+CH_PING_URL = os.environ.get("CLICKHOUSE_PING_URL", "http://localhost:8123/ping")
+
+
+def ch_running(timeout=1.5):
+    """True if the ClickHouse HTTP interface answers (the port clickhouse_connect uses)."""
+    try:
+        with urllib.request.urlopen(CH_PING_URL, timeout=timeout) as r:
+            return r.status == 200
+    except Exception:
+        return False
+
+
+def ch_service(action, log, wait_secs=90):
+    """
+    Start or stop the ClickHouse system service. Uses pkexec (graphical password
+    prompt), then passwordless sudo, or runs directly when already root.
+    Returns True on success; waits for the server to answer (start) or go quiet (stop).
+    """
+    base = ["systemctl", action, CH_SERVICE]
+    if os.geteuid() == 0:
+        attempts = [base]
+    else:
+        attempts = []
+        if shutil.which("pkexec"):
+            attempts.append(["pkexec"] + base)
+        attempts.append(["sudo", "-n"] + base)
+    ok = False
+    for cmd in attempts:
+        log("$ " + " ".join(cmd))
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log(f"  could not run: {e}")
+            continue
+        if r.returncode == 0:
+            ok = True
+            break
+        log(f"  failed (exit {r.returncode}): {(r.stderr or r.stdout).strip()}")
+    if not ok:
+        log(f"Could not {action} ClickHouse automatically. Run in a terminal:  sudo systemctl {action} {CH_SERVICE}")
+        return False
+    want_up = action == "start"
+    deadline = datetime.now().timestamp() + wait_secs
+    while datetime.now().timestamp() < deadline:
+        if ch_running() == want_up:
+            return True
+        time.sleep(1)
+    log(f"ClickHouse did not {'answer' if want_up else 'shut down'} within {wait_secs} s")
+    return False
+
+
+def ch_params():
+    """
+    Connection settings the pipeline really uses: read the constant keyword
+    arguments of the get_client(...) call in synthspec_ch_quiet.py (host, port,
+    username, database). The password always comes from CLICKHOUSE_PASSWORD.
+    """
+    params, source = {}, None
+    for name in ("synthspec_ch_quiet.py", "grape_fft_spectrogram_ch_quiet.py"):
+        path = os.path.join(BASE_DIR, name)
+        try:
+            tree = ast.parse(open(path).read())
+        except (OSError, SyntaxError):
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and getattr(node.func, "attr", getattr(node.func, "id", "")) == "get_client":
+                for kw in node.keywords:
+                    if kw.arg in ("host", "port", "username", "user", "database", "interface", "secure") \
+                            and isinstance(kw.value, ast.Constant):
+                        params["username" if kw.arg == "user" else kw.arg] = kw.value.value
+                source = name
+                break
+        if source:
+            break
+    return params, source
+
+
+CH_CHECK_SCRIPT = r"""
+import json, os, sys
+p = json.loads(sys.argv[1])
+try:
+    import clickhouse_connect
+except ImportError:
+    print("FAIL: the clickhouse_connect module is not installed in this Python (pip install clickhouse-connect)")
+    sys.exit(2)
+print("clickhouse_connect", getattr(clickhouse_connect, "__version__", "?"))
+kw = dict(p)
+kw["password"] = os.environ.get("CLICKHOUSE_PASSWORD", "")
+try:
+    c = clickhouse_connect.get_client(**kw)
+    print("connected as", c.query("SELECT currentUser()").result_rows[0][0],
+          "| server", getattr(c, "server_version", "?"), "| database", c.database)
+    assert c.query("SELECT 1").result_rows[0][0] == 1
+    dbs = [r[0] for r in c.query("SHOW DATABASES").result_rows if r[0] not in ("system", "INFORMATION_SCHEMA", "information_schema")]
+    print("databases:", ", ".join(dbs) or "(none besides system)")
+    tabs = c.query("SELECT database, name, total_rows FROM system.tables WHERE database NOT IN ('system','INFORMATION_SCHEMA','information_schema') ORDER BY 1,2").result_rows
+    for d, t, n in tabs[:30]:
+        print(f"  {d}.{t}: {n} rows")
+    print("OK")
+except Exception as e:
+    print("FAIL:", type(e).__name__, str(e).splitlines()[0][:300] if str(e) else "")
+    sys.exit(1)
+"""
+
+
+def ch_check(py, log):
+    """Preflight: can the pipeline's own Python log in and run queries? True/False."""
+    params, source = ch_params()
+    log(f"ClickHouse check using {py}")
+    log("  settings from " + (f"{source}: {params}" if source else "defaults (no get_client() call found)"))
+    if not os.environ.get("CLICKHOUSE_PASSWORD"):
+        log("  note: CLICKHOUSE_PASSWORD is not set in this environment (fine only if the user has no password)")
+    try:
+        r = subprocess.run([py, "-c", CH_CHECK_SCRIPT, json.dumps(params)],
+                           capture_output=True, text=True, timeout=60, cwd=BASE_DIR)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"  FAIL: could not run the check: {e}")
+        return False
+    for line in (r.stdout + r.stderr).splitlines():
+        log("  " + line)
+    return r.returncode == 0 and "OK" in r.stdout.splitlines()[-1:]
+
+
 def detect_python():
     """Interpreter for the pipeline steps: saved choice, GRAPE_PYTHON, a venv in the
     project (venv/.venv/env), the venv this GUI runs in, else this interpreter."""
@@ -300,11 +426,15 @@ class App(tk.Tk):
         self.busy = False
         self.sources = []
         self.py_path = sys.executable
+        self.ch_auto = self.ch_stop = True
+        self.ch_op = False
+        self.ch_started_by_gui = False
 
         self._build()
         self.refresh_sources()
         self.refresh_configs()
         self.refresh_apf107_status()
+        self.refresh_ch()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         self.after(100, self._poll)
         self.log(f"Project folder: {BASE_DIR}")
@@ -390,6 +520,23 @@ class App(tk.Tk):
         ttk.Entry(r2, textvariable=self.spec_var, width=10).pack(side="left", padx=4)
         self.db_var = tk.BooleanVar(value=self.settings.get("db", True))
         ttk.Checkbutton(r2, text="Use ClickHouse DB (DB flag)", variable=self.db_var).pack(side="left", padx=12)
+
+        rc = ttk.Frame(f3)
+        rc.pack(fill="x", pady=(6, 0))
+        ttk.Label(rc, text="ClickHouse:").pack(side="left")
+        self.ch_var = tk.StringVar(value="checking ...")
+        self.ch_label = ttk.Label(rc, textvariable=self.ch_var, width=12, font=("TkDefaultFont", 10, "bold"))
+        self.ch_label.pack(side="left", padx=4)
+        self.btn_ch_start = ttk.Button(rc, text="Start", command=lambda: self.on_ch("start"))
+        self.btn_ch_start.pack(side="left")
+        self.btn_ch_stop = ttk.Button(rc, text="Stop", command=lambda: self.on_ch("stop"))
+        self.btn_ch_stop.pack(side="left", padx=4)
+        self.btn_ch_test = ttk.Button(rc, text="Test", command=self.on_ch_test)
+        self.btn_ch_test.pack(side="left")
+        self.ch_auto_var = tk.BooleanVar(value=self.settings.get("ch_auto_start", True))
+        ttk.Checkbutton(rc, text="Start automatically if needed", variable=self.ch_auto_var).pack(side="left", padx=(12, 0))
+        self.ch_stop_var = tk.BooleanVar(value=self.settings.get("ch_stop_after", True))
+        ttk.Checkbutton(rc, text="Stop afterwards (only if I started it)", variable=self.ch_stop_var).pack(side="left", padx=8)
 
         rp = ttk.Frame(f3)
         rp.pack(fill="x", pady=(6, 0))
@@ -741,6 +888,87 @@ class App(tk.Tk):
             self.config_var.set("")
         self.refresh_ut()
 
+    # ---------- ClickHouse on demand ----------
+    def refresh_ch(self):
+        """Poll the server in a thread (never blocks the window); reschedules itself."""
+        def probe():
+            up = ch_running()
+            self.post(lambda: self._show_ch(up))
+        threading.Thread(target=probe, daemon=True).start()
+        self.after(5000, self.refresh_ch)
+
+    def _show_ch(self, up):
+        self.ch_var.set("running" if up else "stopped")
+        self.ch_label.configure(foreground="#1a7f1a" if up else "#b00000")
+
+    def on_ch_test(self):
+        """Start the server if needed (asks first), then log in and query it."""
+        if self.busy or self.ch_op:
+            return
+        py = self.py_var.get().strip()
+        if not (py and os.path.isfile(py)):
+            messagebox.showerror("Python not found", f"Not a file:\n{py}")
+            return
+        start_first = False
+        if not ch_running():
+            start_first = messagebox.askyesno("ClickHouse is stopped", "ClickHouse is not running. Start it for the test?\n(It will be stopped again afterwards.)")
+            if not start_first:
+                return
+        self.ch_op = True
+        for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test):
+            b.configure(state="disabled")
+
+        def worker():
+            ok, started = False, False
+            try:
+                if start_first:
+                    self.log("Starting ClickHouse for the test ...")
+                    started = ch_service("start", self.log)
+                    if not started:
+                        return
+                ok = ch_check(py, self.log)
+            finally:
+                if started:
+                    self.log("Stopping ClickHouse again ...")
+                    ch_service("stop", self.log, wait_secs=60)
+                def done():
+                    self.ch_op = False
+                    for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test):
+                        b.configure(state="normal")
+                    self._show_ch(ch_running(0.5))
+                    (messagebox.showinfo if ok else messagebox.showerror)(
+                        "ClickHouse test", "ClickHouse is working." if ok else "ClickHouse test FAILED - see the Output box.")
+                self.post(done)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_ch(self, action):
+        if self.busy or self.ch_op:
+            return
+        self.ch_op = True
+        self.btn_ch_start.configure(state="disabled")
+        self.btn_ch_stop.configure(state="disabled")
+
+        def worker():
+            if action == "start" and ch_running():
+                self.log("ClickHouse is already running")
+                ok = True
+            elif action == "stop" and not ch_running():
+                self.log("ClickHouse is already stopped")
+                ok = True
+            else:
+                self.log(f"{'Starting' if action == 'start' else 'Stopping'} ClickHouse ...")
+                ok = ch_service(action, self.log)
+                if ok:
+                    self.log(f"ClickHouse {'started' if action == 'start' else 'stopped'}")
+                    self.ch_started_by_gui = (action == "start")
+            def done():
+                self.ch_op = False
+                self.btn_ch_start.configure(state="normal")
+                self.btn_ch_stop.configure(state="normal")
+                self._show_ch(ch_running(0.5))
+            self.post(done)
+        threading.Thread(target=worker, daemon=True).start()
+
     def on_browse_python(self):
         path = filedialog.askopenfilename(
             title="Select the python executable of your venv (e.g. venv/bin/python)",
@@ -801,9 +1029,12 @@ class App(tk.Tk):
         pf_arg = self.pf_var.get().strip() or "1400"
         spec_args = self.spec_var.get().split() or ["0", "0", "24"]
         self.settings.update(
-            config=cfg, pathfinder_arg=pf_arg, spec_args=" ".join(spec_args), db=use_db, steps=steps
+            config=cfg, pathfinder_arg=pf_arg, spec_args=" ".join(spec_args), db=use_db, steps=steps,
+            ch_auto_start=self.ch_auto_var.get(), ch_stop_after=self.ch_stop_var.get(),
         )
         save_settings(self.settings)
+        # snapshot Tk variables here; worker threads must not touch Tk
+        self.ch_auto, self.ch_stop = self.ch_auto_var.get(), self.ch_stop_var.get()
 
         for key, label in STEP_DEFS:
             self._tree_set(key, "Pending" if key in steps else "Skipped", "")
@@ -875,7 +1106,21 @@ class App(tk.Tk):
 
         total_start = datetime.now()
         outcome, detail = "ok", ""
+        needs_db = use_db and any(k in steps for k in ("synthspec", "spectrogram"))
         try:
+            if needs_db and not ch_running():
+                if not self.ch_auto:
+                    raise RuntimeError("ClickHouse is not running. Click Start (or tick 'Start automatically').")
+                self.log("ClickHouse is not running - starting it ...")
+                self.post(lambda: self.status_var.set("Starting ClickHouse ..."))
+                if not ch_service("start", self.log):
+                    raise RuntimeError("could not start ClickHouse")
+                self.ch_started_by_gui = True
+                self.log("ClickHouse is up")
+            if needs_db:
+                # fail now, not after an hour of ray tracing
+                if not ch_check(py, self.log):
+                    raise RuntimeError("ClickHouse check failed (see Output). Nothing was run.")
             for key in [k for k, _ in STEP_DEFS if k in steps]:
                 if self.cancel_flag.is_set():
                     outcome = "cancelled"
@@ -912,6 +1157,13 @@ class App(tk.Tk):
         except Exception as e:
             outcome, detail = "failed", str(e)
             self.log(f"ERROR: {e}")
+
+        if self.ch_started_by_gui and self.ch_stop:
+            self.log("Stopping ClickHouse (it was started by this window) ...")
+            if ch_service("stop", self.log, wait_secs=60):
+                self.ch_started_by_gui = False
+                self.log("ClickHouse stopped")
+        self.post(lambda: self._show_ch(ch_running(0.5)))
 
         total = fmt_elapsed((datetime.now() - total_start).total_seconds())
         self.log("-" * 40)
