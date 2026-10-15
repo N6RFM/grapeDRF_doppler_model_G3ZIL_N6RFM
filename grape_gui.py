@@ -700,9 +700,10 @@ class App(tk.Tk):
         self.btn_run.pack(side="left")
         self.btn_cancel = ttk.Button(r4, text="Cancel", command=self.on_cancel, state="disabled")
         self.btn_cancel.pack(side="left", padx=6)
+        # results buttons sit at the far right (packed right-to-left)
+        ttk.Button(r4, text="Open results folder (output/)", command=self.on_open_output).pack(side="right")
         self.btn_last = ttk.Button(r4, text="Show last results", command=self.on_show_last, state="disabled")
-        self.btn_last.pack(side="left", padx=6)
-        ttk.Button(r4, text="Open results folder (output/)", command=self.on_open_output).pack(side="left")
+        self.btn_last.pack(side="right", padx=6)
 
         # log: header row (label left, buttons right) above a dark console
         f4 = ttk.Frame(main)
