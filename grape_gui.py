@@ -44,7 +44,7 @@ import threading
 import time
 import urllib.request
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -99,8 +99,41 @@ def apf107_last_date(path):
         raise ValueError("apf107.dat appears to be empty")
     parts = last_line.split()
     yy, mm, dd = int(parts[0]), int(parts[1]), int(parts[2])
-    year = 2000 + yy if yy < 50 else 1900 + yy
+    year = yy if yy >= 1000 else (2000 + yy if yy < 50 else 1900 + yy)
     return date(year, mm, dd)
+
+
+_DATE_FIELDS = re.compile(r"^(\s*\d+)(\s+\d+)(\s+\d+)")
+
+
+def extend_apf107_one_day(path):
+    """
+    Add one row to apf107.dat for the day after its last row, copying the last day's
+    values ("yesterday's indices"), and return the new last date. The date fields keep
+    their column widths because IRI reads the file in fixed format. The previous file is
+    kept next to it as apf107.dat.bak.
+    """
+    with open(path, "r") as f:
+        lines = f.read().splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    last_line = lines[-1]
+    m = _DATE_FIELDS.match(last_line)
+    if not m:
+        raise ValueError("last line of apf107.dat does not start with a date")
+    last = apf107_last_date(path)
+    new = last + timedelta(days=1)
+    yy_text = m.group(1)
+    year_val = new.year if int(yy_text) >= 1000 else new.year % 100
+    fields = [year_val, new.month, new.day]
+    head = "".join(str(v).rjust(len(g)) for v, g in zip(fields, m.groups()))
+    new_line = head + last_line[m.end():]
+    shutil.copy2(path, path + ".bak")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines + [new_line]) + "\n")
+    os.replace(tmp, path)
+    return new
 
 
 def download_apf107(path, url=APF107_URL, timeout=30):
@@ -1072,6 +1105,10 @@ class App(tk.Tk):
                         if want <= last:
                             text += f"  Selected data ({want:%Y-%m-%d}): covered."
                             color = "dark green"
+                        elif (want - last).days == 1:
+                            text += (f"  Selected data ({want:%Y-%m-%d}) is one day beyond the file: "
+                                     f"{last:%Y-%m-%d}'s values will be used for it automatically.")
+                            color = "#b36b00"
                         else:
                             text += f"  Selected data ({want:%Y-%m-%d}): NOT covered, update needed."
                             color = "red"
@@ -1125,6 +1162,8 @@ class App(tk.Tk):
             return True
 
         short = (run_date - last).days
+        if short == 1:
+            return self._extend_one_day(path, run_date)
         if not messagebox.askyesno(
             "apf107.dat out of date",
             f"apf107.dat ends {last:%Y-%m-%d}, {short} day(s) before the data date "
@@ -1143,12 +1182,28 @@ class App(tk.Tk):
             self.config(cursor="")
         self.log(f"apf107.dat updated: now covers through {new_last:%Y-%m-%d}")
         self.refresh_apf107_status()
+        if run_date > new_last and (run_date - new_last).days == 1:
+            return self._extend_one_day(path, run_date)
         if run_date > new_last:
             return messagebox.askyesno(
                 "Still not covered",
                 f"Even the updated file ends {new_last:%Y-%m-%d} (ECHAIM usually lags 1-2 days).\n"
                 "IRI results for this date may be degraded.\n\nContinue anyway?",
             )
+        return True
+
+    def _extend_one_day(self, path, run_date):
+        """The file is one day short (ECHAIM lags): use the previous day's indices for the missing day."""
+        try:
+            last = apf107_last_date(path)
+            new = extend_apf107_one_day(path)
+        except Exception as e:
+            return messagebox.askyesno(
+                "apf107.dat",
+                f"Could not add yesterday's values for {run_date:%Y-%m-%d}:\n{e}\n\nContinue anyway?")
+        self.log(f"apf107.dat ended {last:%Y-%m-%d}; added a row for {new:%Y-%m-%d} using {last:%Y-%m-%d}'s "
+                 f"values (previous file kept as apf107.dat.bak)")
+        self.refresh_apf107_status()
         return True
 
     # ---------- section 3: pipeline ----------
@@ -1442,6 +1497,23 @@ class App(tk.Tk):
                     "(it was run before this was tracked).\n\nModefinder/synthspec will assume it is the "
                     "frequency you selected. Continue?"):
                 return
+        if "pathfinder" in steps:
+            apf = self.apf_var.get().strip()
+            if os.path.isfile(apf):
+                try:
+                    run_day = date(y, mo, d)
+                    short = (run_day - apf107_last_date(apf)).days
+                except Exception:
+                    short = 0
+                if short == 1:
+                    if not self._extend_one_day(apf, run_day):
+                        return
+                elif short > 1 and not messagebox.askyesno(
+                        "apf107.dat out of date",
+                        f"apf107.dat ends {short} days before {run_day:%Y-%m-%d}. IRI would use fill values, which "
+                        "can crash pathfinder.\n\nUse Update from ECHAIM first, or continue anyway?\n\n"
+                        "Continue anyway?"):
+                    return
         use_db = self.db_var.get()
         if use_db and not os.environ.get("CLICKHOUSE_PASSWORD"):
             if not messagebox.askyesno(
