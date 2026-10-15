@@ -513,17 +513,25 @@ except ImportError:
     sys.exit(0)
 try:
     with h5py.File(sys.argv[1], "r") as f:
-        g = f[sorted(f.keys())[0]]
+        groups = [f[k] for k in sorted(f.keys()) if hasattr(f[k], "keys")] or [f]
         def val(name, default=""):
-            if name not in g:
-                return default
-            v = g[name][()]
-            return v.decode() if isinstance(v, bytes) else v
+            for g in groups:                       # first group that has a non-empty value
+                if name not in g:
+                    continue
+                v = g[name][()]
+                if hasattr(v, "ravel"):
+                    v = v.ravel()
+                    v = v[0] if len(v) else ""
+                v = v.decode() if isinstance(v, bytes) else v
+                if str(v).strip():
+                    return v
+            return default
         print(json.dumps({
-            "callsign": val("callsign"), "grid": val("grid_square"),
+            "callsign": str(val("callsign")), "grid": str(val("grid_square")),
             "lat": float(val("lat", 0.0)), "lon": float(val("long", 0.0)),
-            "receiver": val("receiver_name"),
-            "freqs": [round(float(x), 6) for x in g["center_frequencies"][()].ravel()],
+            "receiver": str(val("receiver_name")),
+            "uuid": str(val("uuid_str")),
+            "freqs": [round(float(x), 6) for x in next(g for g in groups if "center_frequencies" in g)["center_frequencies"][()].ravel()],
         }))
 except Exception as e:
     print(json.dumps({"error": type(e).__name__ + ": " + str(e)}))
@@ -1339,7 +1347,14 @@ class App(tk.Tk):
             return
         call = str(meta.get("callsign", "")).upper()
         freqs = meta["freqs"]
-        text = (f"Station {call} ({meta.get('grid', '')}), {len(freqs)} frequenc{'y' if len(freqs) == 1 else 'ies'}: "
+        grid = meta.get("grid", "")
+        if call:
+            who = f"Station {call} ({grid})" if grid else f"Station {call}"
+        else:
+            bits = [x for x in (f"receiver {meta.get('uuid')}" if meta.get("uuid") else "",
+                                f"lat {meta['lat']:g}, lon {meta['lon']:g}" if meta.get("lat") or meta.get("lon") else "") if x]
+            who = "Callsign not recorded in this data" + (f" ({'; '.join(bits)})" if bits else "")
+        text = (f"{who}, {len(freqs)} frequenc{'y' if len(freqs) == 1 else 'ies'}: "
                 + ", ".join(fmt_freq(f) for f in freqs) + " MHz")
         warn = False
         typed = self.callsign_var.get().strip().upper()
