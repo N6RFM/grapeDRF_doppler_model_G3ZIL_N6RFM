@@ -53,7 +53,7 @@ CSV_OUTPUT_BASE = os.path.join(BASE_DIR, "output", "csv")
 SETTINGS_FILE = os.path.join(BASE_DIR, "grape_gui_settings.json")
 
 # Daily-updated apf107.dat from the UNB ECHAIM project (IRI Working Group)
-APF107_URL = os.environ.get("APF107_URL") or "https://chain-new.chain-project.net/echaim_downloads/apf107.dat"
+APF107_URL = os.environ.get("APF107_URL") or "https://chain-new.chain-project.net/echaim_downloads/DBFiles/apf107.dat"
 
 # apf107.dat used by PHaRLAP/PyLap. Override with the APF107_PATH environment
 # variable, or with the Browse button in the GUI (remembered afterwards).

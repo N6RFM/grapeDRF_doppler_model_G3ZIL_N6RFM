@@ -74,7 +74,7 @@ APF107_PATH = "/home/bob/PyLap_Project/PHARLAP/pharlap_4.5.0/dat/iri2016/apf107.
 
 # Daily-updated source for apf107.dat provided by the University of New Brunswick
 # ECHAIM project on behalf of the IRI Working Group. Updated at ~08:00 EST daily.
-APF107_URL = "https://chain-new.chain-project.net/echaim_downloads/apf107.dat"
+APF107_URL = "https://chain-new.chain-project.net/echaim_downloads/DBFiles/apf107.dat"
 
 
 # -----------------------------
