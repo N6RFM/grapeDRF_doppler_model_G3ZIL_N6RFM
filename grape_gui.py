@@ -798,6 +798,7 @@ class App(tk.Tk):
         self.config_box.bind("<<ComboboxSelected>>", lambda e: self.refresh_ut())
         self.ut_var = tk.StringVar()
         ttk.Label(r1, textvariable=self.ut_var, font=("TkDefaultFont", 10, "bold")).pack(side="left", padx=12)
+        ttk.Button(r1, text="Two-hop sidescatter...", command=self.on_sidescatter).pack(side="right")
 
         r2 = ttk.Frame(f3)
         r2.pack(fill="x", pady=(6, 0))
@@ -1584,6 +1585,20 @@ class App(tk.Tk):
             args=(cfg, callsign, timestamp, steps, pf_arg, hours, use_db, freqs, freq_list),
             daemon=True,
         ).start()
+
+    def on_sidescatter(self):
+        """Open the two-hop sidescatter window (sidescatter_gui.py) on the same config."""
+        script = os.path.join(BASE_DIR, "sidescatter_gui.py")
+        if not os.path.isfile(script):
+            messagebox.showerror("Not found", "sidescatter_gui.py is not in the project folder.")
+            return
+        cmd = [sys.executable, script]
+        if self.config_var.get():
+            cmd += ["--config", self.config_var.get()]
+        try:
+            subprocess.Popen(cmd, cwd=BASE_DIR, start_new_session=True)
+        except OSError as e:
+            messagebox.showerror("Could not start", str(e))
 
     def on_open_output(self):
         out = os.path.join(BASE_DIR, "output")
