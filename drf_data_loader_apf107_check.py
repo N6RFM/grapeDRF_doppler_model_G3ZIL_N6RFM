@@ -112,9 +112,47 @@ def apf107_last_date(path):
     yy, mm, dd = int(parts[0]), int(parts[1]), int(parts[2])
 
     # Convert 2-digit year to 4-digit year
-    year = 2000 + yy if yy < 50 else 1900 + yy
+    year = yy if yy >= 1000 else (2000 + yy if yy < 50 else 1900 + yy)
 
     return date(year, mm, dd)
+
+
+def extend_apf107_one_day(path):
+    """
+    Add one row to apf107.dat for the day after its last row, copying the last day's
+    values ("yesterday's indices"), and return the new last date. Date fields keep
+    their column widths because IRI reads the file in fixed format. The previous file
+    is kept next to it as apf107.dat.bak.
+    """
+    import re
+    import shutil
+    from datetime import timedelta
+    with open(path, "r") as f:
+        lines = f.read().splitlines()
+    while lines and not lines[-1].strip():
+        lines.pop()
+    last_line = lines[-1]
+    m = re.match(r"^(\s*\d+)(\s+\d+)(\s+\d+)", last_line)
+    if not m:
+        raise ValueError("last line of apf107.dat does not start with a date")
+    new = apf107_last_date(path) + timedelta(days=1)
+    year_val = new.year if int(m.group(1)) >= 1000 else new.year % 100
+    head = "".join(str(v).rjust(len(g)) for v, g in zip((year_val, new.month, new.day), m.groups()))
+    shutil.copy2(path, path + ".bak")
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("\n".join(lines + [head + last_line[m.end():]]) + "\n")
+    os.replace(tmp, path)
+    return new
+
+
+def use_previous_day(run_date):
+    """apf107.dat ends the day before the dataset: add that one day from the previous day's values."""
+    last = apf107_last_date(APF107_PATH)
+    extend_apf107_one_day(APF107_PATH)
+    print(f"apf107.dat ended {last.strftime('%Y-%m-%d')}; added a row for "
+          f"{run_date.strftime('%Y-%m-%d')} using {last.strftime('%Y-%m-%d')}'s values "
+          f"(previous file kept as apf107.dat.bak) — OK")
 
 
 def check_and_update_apf107(ut_year, ut_month, ut_day):
@@ -163,6 +201,10 @@ def check_and_update_apf107(ut_year, ut_month, ut_day):
 
     # --- Coverage gap: warn user ---
     days_short = (run_date - last).days
+    if days_short == 1:
+        # One day short: use the previous day's values rather than stopping to ask
+        use_previous_day(run_date)
+        return
     print(f"\nWARNING: apf107.dat does not cover {run_date.strftime('%Y-%m-%d')} "
           f"(file ends {days_short} day(s) earlier on {last.strftime('%Y-%m-%d')}).")
     print("IRI will use fill values for missing indices, which may cause")
@@ -188,7 +230,9 @@ def check_and_update_apf107(ut_year, ut_month, ut_day):
         new_last = apf107_last_date(APF107_PATH)
         print(f"apf107.dat updated successfully — now covers up to {new_last.strftime('%Y-%m-%d')}")
 
-        if run_date > new_last:
+        if run_date > new_last and (run_date - new_last).days == 1:
+            use_previous_day(run_date)
+        elif run_date > new_last:
             # This can happen if the dataset date is very recent and ECHAIM
             # has not yet published indices for it (typically a 1-2 day lag)
             print(f"WARNING: Even the updated file does not cover {run_date.strftime('%Y-%m-%d')}.")
