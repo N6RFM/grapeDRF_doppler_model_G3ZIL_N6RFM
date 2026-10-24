@@ -168,7 +168,13 @@ python3 grape_gui.py
 
 or download the file yourself and use **Browse...** to point the window at it (PHaRLAP's `dat/iri2016/apf107.dat`).
 
+**A second source, SERENE.** If the ECHAIM server is down or slow, `grape_gui.py` can download the file from the University of Birmingham's SERENE service instead. Register at the SERENE "Indices" page (serene.bham.ac.uk/resources/Indices/), which gives you a download link or curl command containing your own token. In the window press **SERENE link...** and paste it; the token is kept only in `grape_gui_settings.json` (readable by you only, and not committed to git) and is never written to the log. Then pick **ECHAIM** or **SERENE** next to **Update**. If the chosen source fails, the other is tried automatically, and the window shows which one supplied the file. The previous file is kept as `apf107.dat.bak`, and a download that looks truncated or is not an `apf107.dat` (for example an expired token) is refused and leaves your file untouched.
+
 **One day short is handled for you.** If `apf107.dat` ends exactly one day before the date of your data (common, because the daily file lags), `grape_gui.py` and `drf_data_loader_apf107_check.py` add a row for the missing day using the previous day's values, keep the old file as `apf107.dat.bak`, and carry on. The window shows this in orange. Two or more days short still asks whether to download a fresh copy.
+
+### `ig_rz.dat` is out of date
+
+IRI also reads `ig_rz.dat` (monthly sunspot and ionospheric indices) from the same `dat/iri2016` folder as `apf107.dat`. It changes slowly and runs well into the future, so it rarely needs replacing, but when the month of your data is past the end of its range IRI may stop or give poor results. `grape_gui.py` shows the range under the `apf107.dat` line (green when covered, orange for the last month in the file, red when not covered) and asks before a run that would need it. **Where to get ig_rz.dat...** lists places to download a current copy (SERENE, ECHAIM, IRI); save it over the old one after copying that to `ig_rz.dat.bak`, then press **Re-check**.
 
 ### "No 'ut = [...]' line in this config"
 
