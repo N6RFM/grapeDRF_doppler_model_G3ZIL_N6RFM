@@ -242,6 +242,7 @@ git merge upstream/main     # if README.md conflicts, keep this page's version
 ## Credits
 
 - **Gwyn Griffiths, G3ZIL**: the grapeDRF Doppler model itself, and everything upstream of this page.
+- **Gwyn's Oct 2026 updates**, merged here on 24 Oct 2026: UTC handling of the ClickHouse timestamps (`synthspec.py`, `grape_fft_spectrogram.py`) and the mixed two-hop modes 2FE and 2EF with their legend patches (`modefinder.py`). The `_ch` / `_quiet` copies carry the same changes.
 - **W. Engelke, AB4EJ**: `plotspectrum_V4a.py`.
 - **Bob, N6RFM**: the convenience scripts on this page.
 - **Claude (Anthropic)**: co-wrote `grape_gui.py` and `sidescatter_gui.py` with N6RFM, and helped with the repository clean-up, the ClickHouse password handling and this README.

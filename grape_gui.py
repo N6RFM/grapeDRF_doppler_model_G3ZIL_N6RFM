@@ -1144,6 +1144,32 @@ class App(tk.Tk):
     # ---------- thread-safe plumbing ----------
     def log(self, text):
         self.q.put(("log", text))
+        fh = getattr(self, "_run_log_fh", None)
+        if fh:
+            try:
+                fh.write(text + "\n"); fh.flush()
+            except Exception:
+                self._run_log_fh = None
+
+    def _open_run_log(self, cfg, timestamp):
+        self._close_run_log()
+        try:
+            d = os.path.join(BASE_DIR, "output", "logs")
+            os.makedirs(d, exist_ok=True)
+            name = "run_%s_%s_%s.log" % (os.path.splitext(cfg)[0], timestamp, datetime.now().strftime("%Y%m%d-%H%M%S"))
+            self._run_log_path = os.path.join(d, name)
+            self._run_log_fh = open(self._run_log_path, "w", encoding="utf-8")
+        except Exception:
+            self._run_log_fh = None
+
+    def _close_run_log(self):
+        fh = getattr(self, "_run_log_fh", None)
+        self._run_log_fh = None
+        if fh:
+            try:
+                fh.close()
+            except Exception:
+                pass
 
     def post(self, fn):
         self.q.put(("do", fn))
@@ -1986,6 +2012,9 @@ class App(tk.Tk):
             messagebox.showinfo("Results folder", f"Your results are in:\n{out}")
 
     def _finish_results(self, last, show):
+        if getattr(self, "_run_log_path", None):
+            self.log("Log saved: " + self._run_log_path)
+        self._close_run_log()
         """Remember this run's results (survives closing the window) and optionally show them."""
         self.settings["last_run"] = last
         save_settings(self.settings)
@@ -2113,6 +2142,7 @@ class App(tk.Tk):
 
         total_start = datetime.now()
         freq_txt = "config frequency" if freqs == [None] else ", ".join(fmt_freq(f) for f in freqs) + " MHz"
+        self._open_run_log(cfg, timestamp)
         self.log("=" * 60)
         self.log(self.run_data_text)
         self.log(f"Config: {cfg}   UT: {timestamp}   Steps: {', '.join(steps)}   Frequencies: {freq_txt}")
