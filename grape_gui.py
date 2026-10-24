@@ -575,6 +575,48 @@ except Exception as e:
 """
 
 
+CH_CLEAR_SCRIPT = r"""
+import json, os, sys
+p = json.loads(sys.argv[1])
+table = p.pop("_table")
+try:
+    import clickhouse_connect
+except ImportError:
+    print("FAIL: the clickhouse_connect module is not installed in this Python (pip install clickhouse-connect)")
+    sys.exit(2)
+kw = dict(p)
+kw["password"] = os.environ.get("CLICKHOUSE_PASSWORD", "")
+try:
+    c = clickhouse_connect.get_client(**kw)
+    before = c.query(f"SELECT count() FROM {table}").result_rows[0][0]
+    print(f"{table} holds {before} rows")
+    c.command(f"TRUNCATE TABLE {table}")
+    after = c.query(f"SELECT count() FROM {table}").result_rows[0][0]
+    print(f"after clearing: {after} rows")
+    print("OK" if after == 0 else "FAIL: rows remain")
+    sys.exit(0 if after == 0 else 1)
+except SystemExit:
+    raise
+except Exception as e:
+    print("FAIL:", type(e).__name__, str(e).splitlines()[0][:300] if str(e) else "")
+    sys.exit(1)
+"""
+
+
+def ch_clear(py, log):
+    """Empty psws.synth_spec (only synthetic spectra the pipeline can regenerate). True on success."""
+    params, _source = ch_params()
+    try:
+        r = subprocess.run([py, "-c", CH_CLEAR_SCRIPT, json.dumps(dict(params, _table=CH_REQUIRED_TABLES[0]))],
+                           capture_output=True, text=True, timeout=120, cwd=BASE_DIR)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        log(f"  FAIL: could not clear the table: {e}")
+        return False
+    for line in (r.stdout + r.stderr).splitlines():
+        log("  " + line)
+    return r.returncode == 0
+
+
 def ch_check(py, log):
     """Preflight: can the pipeline's own Python log in and run queries? True/False."""
     params, source = ch_params()
@@ -1008,6 +1050,8 @@ class App(tk.Tk):
         self.btn_ch_stop.pack(side="left", padx=4)
         self.btn_ch_test = ttk.Button(rc, text="Test", command=self.on_ch_test)
         self.btn_ch_test.pack(side="left")
+        self.btn_ch_clear = ttk.Button(rc, text="Clear table", command=self.on_ch_clear)
+        self.btn_ch_clear.pack(side="left", padx=(4, 0))
         self.ch_auto_var = tk.BooleanVar(value=self.settings.get("ch_auto_start", True))
         ttk.Checkbutton(rc, text="Auto-start if needed", variable=self.ch_auto_var).pack(side="left", padx=(12, 0))
         self.ch_stop_var = tk.BooleanVar(value=self.settings.get("ch_stop_after", True))
@@ -1537,7 +1581,7 @@ class App(tk.Tk):
             if not start_first:
                 return
         self.ch_op = True
-        for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test):
+        for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test, self.btn_ch_clear):
             b.configure(state="disabled")
 
         def worker():
@@ -1555,11 +1599,55 @@ class App(tk.Tk):
                     ch_service("stop", self.log, wait_secs=60)
                 def done():
                     self.ch_op = False
-                    for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test):
+                    for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test, self.btn_ch_clear):
                         b.configure(state="normal")
                     self._show_ch(ch_running(0.5))
                     (messagebox.showinfo if ok else messagebox.showerror)(
                         "ClickHouse test", "ClickHouse is working." if ok else "ClickHouse test FAILED - see the Output box.")
+                self.post(done)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_ch_clear(self):
+        """Empty psws.synth_spec after asking. Starts ClickHouse if needed and stops it again."""
+        if self.busy or self.ch_op:
+            return
+        py = self.py_var.get().strip()
+        if not (py and os.path.isfile(py)):
+            messagebox.showerror("Python not found", f"Not a file:\n{py}")
+            return
+        if not messagebox.askyesno(
+                "Clear the synthetic spectra table",
+                "Delete ALL rows in the ClickHouse table psws.synth_spec?\n\n"
+                "It only holds the synthetic spectra this pipeline generates, so nothing from your recordings is "
+                "lost, and you can refill it by running Synthspec again for the days you want.\n\n"
+                "This cannot be undone. Clear it?", default="no", icon="warning"):
+            return
+        was_running = ch_running()
+        self.ch_op = True
+        for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test, self.btn_ch_clear):
+            b.configure(state="disabled")
+
+        def worker():
+            ok, started = False, False
+            try:
+                if not was_running:
+                    self.log("Starting ClickHouse to clear the table ...")
+                    started = ch_service("start", self.log)
+                    if not started:
+                        return
+                self.log("Clearing psws.synth_spec ...")
+                ok = ch_clear(py, self.log)
+            finally:
+                if started:
+                    self.log("Stopping ClickHouse again ...")
+                    ch_service("stop", self.log, wait_secs=60)
+                def done():
+                    self.ch_op = False
+                    for b in (self.btn_ch_start, self.btn_ch_stop, self.btn_ch_test, self.btn_ch_clear):
+                        b.configure(state="normal")
+                    self._show_ch(ch_running(0.5))
+                    (messagebox.showinfo if ok else messagebox.showerror)(
+                        "Clear table", "The table is now empty." if ok else "Clearing FAILED - see the Output box.")
                 self.post(done)
         threading.Thread(target=worker, daemon=True).start()
 
