@@ -16,7 +16,7 @@ import csv
 import sys
 import os
 import configparser
-from datetime import datetime
+from datetime import datetime, timezone
 import statistics
 import pylab as plt
 import matplotlib.patches as mpatches
@@ -294,7 +294,7 @@ if db_flag == 'DB':
             # Convert time column to datetime objects just before insert
             for row in data:
               if isinstance(row[0], str):
-                row[0] = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
+                row[0] = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)   # times are UTC
             # Sanitise any remaining empty strings to None before insert
             data = [
              [None if (i > 0 and val == '') else val for i, val in enumerate(row)]

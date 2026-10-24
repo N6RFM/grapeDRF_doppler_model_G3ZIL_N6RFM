@@ -201,7 +201,7 @@ if db_flag == 'True':
   select_sql = """SELECT toRelativeSecondNum(toTimeZone(time, 'UTC')) % 86400 / 3600.0 AS hour,
                     p_mode, color, doppler
                     FROM psws.synth_spec
-                    WHERE time BETWEEN '""" + ts_start + """' AND '""" + ts_end + """'
+                    WHERE time BETWEEN toDateTime('""" + ts_start + """', 'UTC') AND toDateTime('""" + ts_end + """', 'UTC')
                     AND frequency = '""" + str(frequency) + """'
                     AND rx = '""" + theCallsign + """'
                     ORDER BY time ASC"""
