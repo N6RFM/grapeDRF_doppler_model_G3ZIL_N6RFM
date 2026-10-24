@@ -97,7 +97,7 @@ sudo apt install python3-tk
 
 ### ClickHouse is not running
 
-`grape_gui.py` shows ClickHouse as running (green) or stopped (red). **Start** and **Stop** control it, and with **Auto-start if needed** ticked a run starts it for you and stops it again afterwards (only if the window started it). Starting and stopping asks for your password through the desktop's password prompt (`pkexec`). From a terminal the equivalent is:
+`grape_gui.py` shows ClickHouse as running (green) or stopped (red). **Start** and **Stop** control it, **Test** checks the login, **Clear table** empties the synthetic-spectra table `psws.synth_spec` (after asking; it starts and stops ClickHouse for you if needed), and with **Auto-start if needed** ticked a run starts it for you and stops it again afterwards (only if the window started it). Starting and stopping asks for your password through the desktop's password prompt (`pkexec`). From a terminal the equivalent is:
 
 ```bash
 sudo systemctl start clickhouse-server
@@ -142,6 +142,14 @@ clickhouse-client --user default --multiquery < /tmp/create_synth_spec.sql
 ```
 
 (Add `--password` if the `default` user has one.) Then confirm as your own user with `DESCRIBE TABLE psws.synth_spec`. The table only holds the synthetic spectra the pipeline generates, so after recreating it, rerun synthspec to refill it.
+
+### Synthspec stops with `TypeError: '<' not supported between instances of 'NoneType' and 'str'`
+
+The modefinder results contain rays it could not give a mode to (a blank `p_mode`; in October data these were two-hop rays around midday whose first hop peaks near 130 km, between the E and F layers). They cannot be sorted or coloured. `synthspec_ch*.py` now leaves them out of the synthetic spectrum and prints how many it skipped; they stay in the modefinder csv.
+
+### The synthetic traces are drawn hours late on the spectrogram
+
+Seen on computers whose clock is not on UTC (for example US Central time, where the traces came out 5 hours late in summer and 6 in winter). The database driver reads a time with no time zone as this computer's local time, so the UTC times written by `synthspec_ch*.py` were stored shifted and the spectrogram overlay drew them shifted. The model-only plot (`*_synth_doppler.png`) was always right. `synthspec_ch*.py` and `grape_fft_spectrogram_ch*.py` now mark the times as UTC. Rows written before the fix are still shifted, so press **Clear table**, then run Synthspec and Spectrogram again for the days you want.
 
 ### The log says "Connected Not executed" or a step "Failed: database insert error"
 
