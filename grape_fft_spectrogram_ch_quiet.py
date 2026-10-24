@@ -268,8 +268,10 @@ if db_flag == 'True':
     cyan_patch = mpatches.Patch(color='cyan', label='2Fhi')
     lime_patch = mpatches.Patch(color='lime', label='1Ehi')
     orchid_patch = mpatches.Patch(color='orchid', label='2Ehi')
-    plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, brown_patch, cyan_patch, lime_patch, orchid_patch],\
-      ncol=2, loc=legend_loc)
+    orange_patch = mpatches.Patch(color='orange', label='2FE')
+    gold_patch = mpatches.Patch(color='gold', label='2EF')
+    plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, brown_patch, cyan_patch, lime_patch, orchid_patch, orange_patch, gold_patch],\
+      ncol=3, loc=legend_loc)
      
     plt.savefig(plot_dir + "/Spectrogram+Synth" + "_" + str(frequency) + "MHz_" + date + ".png", dpi=200) #dpi was 600 - 200 reduces speckles in saved png file
   else:

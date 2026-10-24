@@ -119,6 +119,14 @@ for i in range (0,n_traces):
     if path_data[i,3] > min_apogee_F and path_data[i,4] > min_apogee_F:
       p_mode[i] = '2F'
 
+# Mixed 2-hop modes: first hop F, second hop E ('2FE'), and the reverse ('2EF')
+for i in range (0,n_traces):
+  if path_data[i,0] == 2 and p_mode[i] == '':
+    if path_data[i,3] > min_apogee_F and min_apogee_E < path_data[i,4] < max_apogee_E:
+      p_mode[i] = '2FE'
+    elif min_apogee_E < path_data[i,3] < max_apogee_E and path_data[i,4] > min_apogee_F:
+      p_mode[i] = '2EF'
+
 # Fifth pass look for 1F that are high rays
 for i in range (0,n_traces):
   if path_data[i,0] == 1:
@@ -168,7 +176,12 @@ if np.min(E_median) > min_apogee_E:
       if p_mode[i] == '1E' and path_data[i,1] > (e_median+sep_EloEhi):
         p_mode[i]='1Ehi'
         #print("corrected 1E to 1Ehi at ", time_str[i])
-
+# Debug code
+unassigned = np.where(p_mode == '')[0]
+print(len(unassigned), "unassigned rays")
+for i in unassigned:
+  print(time_str[i], path_data[i,0:5])   # hops, elev, virt ht, apogee, 2nd hop apogee
+  
 print("Assignment to modes completed")
 #for i in range (0,n_traces): 
 #  print(time_str[i],p_mode[i])
@@ -197,8 +210,12 @@ for i in range (0,n_traces):
     color[i]='lime'
   elif p_mode[i] == '2Ehi':
     color[i]='orchid'
+  elif p_mode[i] == '2FE':
+    color[i]='orange'
+  elif p_mode[i] == '2EF':
+    color[i]='gold'
   else:
-    color[i]='r'
+    color[i]='k'
 
 fig, ax = plt.subplots()     
 plt.suptitle("Initial elevation of " + str(freq) +" MHz rays leaving " + tx + " arriving at " + callsign, fontsize=12)
@@ -220,8 +237,11 @@ grey_patch = mpatches.Patch(color='red', label='1Fhi')
 cyan_patch = mpatches.Patch(color='cyan', label='2Fhi')
 lime_patch = mpatches.Patch(color='lime', label='1Ehi')
 orchid_patch = mpatches.Patch(color='orchid', label='2Ehi')
-plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, grey_patch, cyan_patch, lime_patch, orchid_patch],\
-   ncol=2, loc=legend_loc)
+orange_patch = mpatches.Patch(color='orange', label='2FE')
+gold_patch = mpatches.Patch(color='gold', label='2EF')
+
+plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, grey_patch, cyan_patch, lime_patch, orchid_patch, orange_patch, gold_patch],\
+   ncol=3, loc=legend_loc)
 
 # save the elevation figure
 plt.savefig(plot_dir + "/" + csv_in_file + "_elev.png", dpi=600)

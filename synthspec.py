@@ -16,7 +16,7 @@ import csv
 import sys
 import os
 import configparser
-from datetime import datetime
+from datetime import datetime, timezone   # 24 Oct. 2026: timezone handling added
 import statistics
 import pylab as plt
 import matplotlib.patches as mpatches
@@ -179,8 +179,11 @@ grey_patch = mpatches.Patch(color='red', label='1Fhi')
 cyan_patch = mpatches.Patch(color='cyan', label='2Fhi')
 lime_patch = mpatches.Patch(color='lime', label='1Ehi')
 orchid_patch = mpatches.Patch(color='orchid', label='2Ehi')
-plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, grey_patch, cyan_patch, lime_patch, orchid_patch],\
-   ncol=2, loc=legend_loc)
+orange_patch = mpatches.Patch(color='orange', label='2FE')
+gold_patch = mpatches.Patch(color='gold', label='2EF')
+
+plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, grey_patch, cyan_patch, lime_patch, orchid_patch, orange_patch, gold_patch],\
+   ncol=3, loc=legend_loc)
 
 # save and show the figure
 plt.savefig(plot_dir + "/" + csv_in_file + "_synth_doppler.png", dpi=600)
@@ -289,7 +292,7 @@ if db_flag == 'DB':
             # Convert time column to datetime objects just before insert
             for row in data:
               if isinstance(row[0], str):
-                row[0] = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S')
+                row[0] = datetime.strptime(row[0], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
             # Sanitise any remaining empty strings to None before insert
             data = [
              [None if (i > 0 and val == '') else val for i, val in enumerate(row)]

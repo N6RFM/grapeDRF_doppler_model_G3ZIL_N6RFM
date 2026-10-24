@@ -22,8 +22,7 @@ import matplotlib as mpl
 import pylab as plt
 from scipy.fft import fft, fftfreq, fftshift
 from scipy import signal
-from datetime import datetime, timedelta
-import pytz
+from datetime import datetime, timedelta, timezone
 import sys
 import os
 import configparser
@@ -200,19 +199,20 @@ if db_flag == 'True':
   connected = "Not connected"
   execute = "Not executed"
    # get stop and start times in required format from metadata s0 start time and length in minutes
-  ts_start = str(datetime.fromtimestamp(s0/10, pytz.utc).strftime('%Y-%m-%d %H:%M:%S'))
-  ts_end = datetime.fromtimestamp(s0/10, pytz.utc) + timedelta(minutes=length)
-  ts_end = str(ts_end.strftime('%Y-%m-%d %H:%M:%S'))
+  t_start = datetime.fromtimestamp(float(s)/10, timezone.utc)
+  t_end = t_start + timedelta(minutes=length)
+  ts_start = t_start.strftime('%Y-%m-%d %H:%M:%S')
+  ts_end = t_end.strftime('%Y-%m-%d %H:%M:%S')
 
   # Construct the SQL statement, with time extracted as hour of the day
   # toRelativeSecondNum gives seconds since midnight, divide by 3600 for hour
-  select_sql = """SELECT toRelativeSecondNum(toTimeZone(time, 'UTC')) % 86400 / 3600.0 AS hour,
-                    p_mode, color, doppler
-                    FROM psws.synth_spec
-                    WHERE time BETWEEN '""" + ts_start + """' AND '""" + ts_end + """'
-                    AND frequency = '""" + str(frequency) + """'
-                    AND rx = '""" + theCallsign + """'
-                    ORDER BY time ASC"""
+  select_sql = f"""SELECT toRelativeSecondNum(toTimeZone(time, 'UTC')) % 86400 / 3600.0 AS hour,
+               p_mode, color, doppler
+               FROM psws.synth_spec
+               WHERE time BETWEEN toDateTime('{ts_start}', 'UTC') AND toDateTime('{ts_end}', 'UTC')
+               AND frequency = '{frequency}'
+               AND rx = '{theCallsign}'
+               ORDER BY time ASC"""
 
   print("SQL statement is: ", select_sql)   # Useful check that it is as required
 
@@ -276,8 +276,10 @@ if db_flag == 'True':
     cyan_patch = mpatches.Patch(color='cyan', label='2Fhi')
     lime_patch = mpatches.Patch(color='lime', label='1Ehi')
     orchid_patch = mpatches.Patch(color='orchid', label='2Ehi')
-    plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, brown_patch, cyan_patch, lime_patch, orchid_patch],\
-      ncol=2, loc=legend_loc)
+    orange_patch = mpatches.Patch(color='orange', label='2FE')
+    gold_patch = mpatches.Patch(color='gold', label='2EF') 
+    plt.legend(handles=[black_patch, blue_patch, green_patch, purple_patch, brown_patch, cyan_patch, lime_patch, orchid_patch, orange_patch, gold_patch],\
+      ncol=3, loc=legend_loc)
      
     plt.savefig(plot_dir + "/Spectrogram+Synth" + "_" + str(frequency) + "MHz_" + date + ".png", dpi=600)
   else:
