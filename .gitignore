@@ -170,3 +170,4 @@ __pycache__/
 *.h5
 grape_gui_settings.json
 *.bak
+*.orig
