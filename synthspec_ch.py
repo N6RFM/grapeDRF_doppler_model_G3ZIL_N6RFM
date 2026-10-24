@@ -99,6 +99,14 @@ print(header)
 # the sort the data array by p_mode then time
 # sort by p_mode is needed as to calculate doppler we take the difference at successive time intervals for the same mode.
 
+# Leave out rays modefinder could not assign to a mode (blank p_mode): they cannot be sorted or coloured
+n_all = len(data)
+data = [r for r in data if len(r) > 3 and r[2] is not None and r[3] is not None]
+if len(data) < n_all:
+  print("Skipping", n_all - len(data), "of", n_all, "rows that modefinder gave no mode (blank p_mode)")
+if not data:
+  sys.exit("No rows with an assigned mode in " + csv_in_name + "; nothing to do")
+
 temp_data=np.array(data)
 
 indices=np.lexsort((temp_data[:,0], temp_data[:,2]))    # lexsort gives indicies in sorted order not sorted array, the first sort variable is second here

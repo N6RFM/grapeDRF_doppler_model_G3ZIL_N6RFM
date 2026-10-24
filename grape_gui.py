@@ -31,7 +31,10 @@ Dependencies: Python standard library only (tkinter included).
 """
 
 import ast
+import gzip
+import io
 import json
+import shlex
 import os
 import queue
 import re
@@ -42,7 +45,9 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.parse
 import urllib.request
+import webbrowser
 import zipfile
 from datetime import date, datetime, timedelta
 
@@ -136,16 +141,106 @@ def extend_apf107_one_day(path):
     return new
 
 
-def download_apf107(path, url=APF107_URL, timeout=30):
+def redact_url(url):
+    """scheme://host/path with the query (where a token usually is) hidden, for logs and messages."""
+    u = urllib.parse.urlsplit(url)
+    return f"{u.scheme}://{u.netloc}{u.path}" + ("?..." if u.query else "")
+
+
+def parse_download_command(text):
     """
-    Download a fresh apf107.dat to a temporary file, check it parses, then
-    atomically replace the old file. Returns the last date the new file covers.
+    Accept either a bare link or a pasted `curl ...` command (as SERENE gives after registration)
+    and return (url, headers). Headers given with -H/--header are kept so a token sent as a
+    header works as well as one inside the link.
+    """
+    text = text.replace("\\\n", " ").strip()
+    if not text:
+        raise ValueError("Nothing was pasted.")
+    try:
+        toks = shlex.split(text)
+    except ValueError as e:
+        raise ValueError(f"Could not read that text ({e}). Paste the link or the whole curl command.")
+    url, headers, i = None, {}, 0
+    while i < len(toks):
+        t = toks[i]
+        if t in ("-H", "--header") and i + 1 < len(toks):
+            name, _, val = toks[i + 1].partition(":")
+            if name.strip():
+                headers[name.strip()] = val.strip()
+            i += 2
+            continue
+        if t.startswith(("http://", "https://")) and url is None:
+            url = t
+        i += 1
+    if not url:
+        raise ValueError("No http(s) link found in what was pasted.")
+    return url, headers
+
+
+def apf107_sources(settings, preferred="ECHAIM"):
+    """Ordered download sources: the chosen one first, then the other if it is set up."""
+    serene = settings.get("serene") or {}
+    surl = os.environ.get("SERENE_APF107_URL") or serene.get("url")
+    src = {"ECHAIM": {"name": "ECHAIM", "url": APF107_URL, "headers": {}}}
+    if surl:
+        src["SERENE"] = {"name": "SERENE", "url": surl, "headers": serene.get("headers") or {}}
+    order = [preferred] + [k for k in ("ECHAIM", "SERENE") if k != preferred]
+    return [src[k] for k in order if k in src]
+
+
+def _unpack_download(data):
+    """Plain text, or a gzip/zip that holds apf107.dat."""
+    if data[:2] == b"\x1f\x8b":
+        return gzip.decompress(data)
+    if data[:4] == b"PK\x03\x04":
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = zf.namelist()
+            pick = next((n for n in names if "apf107" in n.lower()), names[0])
+            return zf.read(pick)
+    return data
+
+
+def download_apf107(path, url=APF107_URL, timeout=60, attempts=1, log=None, headers=None):
+    """
+    Download a fresh apf107.dat to a temporary file, check it parses and is not truncated, then
+    atomically replace the old file (kept as apf107.dat.bak). Returns the last date it covers.
+    The server is sometimes slow, so a timeout can be retried (attempts).
     """
     tmp = path + ".tmp"
+    hdrs = {"User-Agent": "grape_gui.py (N6RFM)"}
+    hdrs.update(headers or {})
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp, open(tmp, "wb") as out:
-            shutil.copyfileobj(resp, out)
-        new_last = apf107_last_date(tmp)   # raises if it is not a valid file
+        data = None
+        for n in range(1, attempts + 1):
+            try:
+                req = urllib.request.Request(url, headers=hdrs)
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    data = resp.read()
+                break
+            except (OSError, ValueError) as e:      # timeouts and connection errors
+                if n >= attempts:
+                    raise
+                if log:
+                    log(f"Attempt {n} of {attempts} failed ({e}); trying again in 5 s ...")
+                time.sleep(5)
+        try:
+            data = _unpack_download(data)
+            with open(tmp, "wb") as out:
+                out.write(data)
+            new_last = apf107_last_date(tmp)   # raises if it is not a valid file
+        except Exception as e:
+            raise ValueError("The server answered, but not with an apf107.dat "
+                             f"({type(e).__name__}: {e}). If this is SERENE, the link's token may have expired; "
+                             "paste a fresh link.")
+        if os.path.isfile(path):
+            with open(path, "rb") as f:
+                old_lines = sum(1 for _ in f)
+            with open(tmp, "rb") as f:
+                new_lines = sum(1 for _ in f)
+            if old_lines > 1000 and new_lines < old_lines * 0.5:
+                raise ValueError(f"The downloaded file has only {new_lines} lines against {old_lines} in yours, "
+                                 "so it looks truncated. Your file was not changed.")
+            shutil.copy2(path, path + ".bak")
         os.replace(tmp, path)
         return new_last
     finally:
@@ -154,6 +249,69 @@ def download_apf107(path, url=APF107_URL, timeout=30):
                 os.remove(tmp)
             except OSError:
                 pass
+
+
+def update_apf107(path, sources, attempts=1, log=None):
+    """Try each source in turn. Returns (last_date, source_name); raises with every failure listed."""
+    failures = []
+    for src in sources:
+        where = f"{src['name']} ({redact_url(src['url'])})"
+        if log:
+            log(f"Downloading from {where}")
+        try:
+            return download_apf107(path, src["url"], attempts=attempts, log=log, headers=src.get("headers")), src["name"]
+        except Exception as e:
+            failures.append(f"{src['name']}: {e}")
+            if log:
+                log(f"{src['name']} failed: {e}")
+    raise RuntimeError("; ".join(failures))
+
+
+def igrz_range(path):
+    """
+    ig_rz.dat (monthly IG12/Rz12 indices) -> (updated_date, (start_year, start_month), (end_year, end_month)).
+    Line 1 is "month,day,year," of the last update; line 2 is "start month, start year, end month, end year,".
+    """
+    with open(path, "r") as f:
+        lines = [ln for ln in (l.strip() for l in f) if ln]
+    a = [int(x) for x in re.findall(r"-?\d+", lines[0])][:3]
+    b = [int(x) for x in re.findall(r"-?\d+", lines[1])][:4]
+    if len(a) < 3 or len(b) < 4:
+        raise ValueError("unexpected header")
+    return date(a[2], a[0], a[1]), (b[1], b[0]), (b[3], b[2])
+
+
+def igrz_status(path, want=None):
+    """(text, colour, covered) for the ig_rz.dat that sits next to apf107.dat. covered is None if unknown."""
+    if not os.path.isfile(path):
+        return ("ig_rz.dat not found next to apf107.dat (needed by IRI for the monthly indices).", "gray40", None)
+    try:
+        updated, (sy, sm), (ey, em) = igrz_range(path)
+    except Exception as e:
+        return (f"Could not read ig_rz.dat: {e}", "gray40", None)
+    months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+    text = f"ig_rz.dat covers {months[sm - 1]} {sy} to {months[em - 1]} {ey} (file updated {updated:%Y-%m-%d})."
+    if want is None:
+        return text, "gray40", None
+    if (want.year, want.month) > (ey, em):
+        return (text + f"  Selected data ({months[want.month - 1]} {want.year}): NOT covered, replace ig_rz.dat "
+                       "(see Troubleshooting in the README).", "red", False)
+    if (want.year, want.month) == (ey, em):
+        return text + f"  Selected data ({months[want.month - 1]} {want.year}): covered, but it is the last month in the file.", "#b36b00", True
+    return text + f"  Selected data ({months[want.month - 1]} {want.year}): covered.", "dark green", True
+
+
+# Where a current ig_rz.dat can be had (no automatic download: it changes rarely).
+IGRZ_SOURCES = [
+    ("SERENE, University of Birmingham (free registration; the link you are given carries your token)",
+     "https://serene.bham.ac.uk/resources/download/Indices__ig_rz.dat/"),
+    ("ECHAIM, University of New Brunswick (updated daily; the same server as apf107.dat)",
+     "https://chain-new.chain-project.net/echaim_downloads/ig_rz.dat"),
+    ("ECHAIM \"capped\" copy, only for IRI builds from before December 2023 that crash on the new file",
+     "https://chain-new.chain-project.net/echaim_downloads/capped/ig_rz.dat"),
+    ("IRI working group (irimodel.org). Check its date first; it was last changed 2026-07-31 when I looked",
+     "https://irimodel.org/indices/ig_rz.dat"),
+]
 
 
 def parse_zip_datetime(zip_name):
@@ -311,23 +469,23 @@ def ch_running(timeout=1.5):
 
 def ch_service(action, log, wait_secs=90):
     """
-    Start or stop the ClickHouse system service. Uses pkexec (graphical password
-    prompt), then passwordless sudo, or runs directly when already root.
+    Start or stop the ClickHouse system service. Tries passwordless sudo first (it answers
+    at once, so an unattended run does not sit waiting), then pkexec (graphical password
+    prompt), or runs directly when already root.
     Returns True on success; waits for the server to answer (start) or go quiet (stop).
     """
-    base = ["systemctl", action, CH_SERVICE]
+    base = [shutil.which("systemctl") or "systemctl", action, CH_SERVICE]
     if os.geteuid() == 0:
         attempts = [base]
     else:
-        attempts = []
+        attempts = [["sudo", "-n"] + base]
         if shutil.which("pkexec"):
             attempts.append(["pkexec"] + base)
-        attempts.append(["sudo", "-n"] + base)
     ok = False
     for cmd in attempts:
         log("$ " + " ".join(cmd))
         try:
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=180 if action == "start" else 90)
         except (OSError, subprocess.TimeoutExpired) as e:
             log(f"  could not run: {e}")
             continue
@@ -653,6 +811,7 @@ def save_settings(settings):
     try:
         with open(SETTINGS_FILE, "w") as f:
             json.dump(settings, f, indent=2)
+        os.chmod(SETTINGS_FILE, 0o600)       # may hold a download token
     except OSError:
         pass
 
@@ -776,15 +935,29 @@ class App(tk.Tk):
         e.pack(side="left", fill="x", expand=True, padx=4)
         e.bind("<FocusOut>", lambda ev: self._apf_path_changed())
         ttk.Button(pr, text="Browse...", command=self.on_browse_apf).pack(side="left")
+        self.btn_serene = ttk.Button(pr, text="SERENE link...", command=self.on_serene_link)
+        self.btn_serene.pack(side="left", padx=(6, 0))
         sr = ttk.Frame(f2)
         sr.pack(fill="x", pady=(6, 0))
         self.apf_status = tk.StringVar()
         self.apf_label = ttk.Label(sr, textvariable=self.apf_status)
         self.apf_label.pack(side="left")
-        self.btn_apf_update = ttk.Button(sr, text="Update from ECHAIM", command=self.on_update_apf)
+        self.btn_apf_update = ttk.Button(sr, text="Update", command=self.on_update_apf)
         self.btn_apf_update.pack(side="right")
+        self.apf_src_var = tk.StringVar(value=self.settings.get("apf107_source", "ECHAIM"))
+        self.apf_src_box = ttk.Combobox(sr, textvariable=self.apf_src_var, state="readonly", width=8,
+                                        values=("ECHAIM", "SERENE"))
+        self.apf_src_box.pack(side="right", padx=4)
+        self.apf_src_box.bind("<<ComboboxSelected>>", lambda e: self._apf_source_changed())
+        ttk.Label(sr, text="Update from:").pack(side="right")
         self.btn_apf_check = ttk.Button(sr, text="Re-check", command=self.refresh_apf107_status)
-        self.btn_apf_check.pack(side="right", padx=4)
+        self.btn_apf_check.pack(side="right", padx=8)
+        self.igrz_text = tk.StringVar()
+        ir = ttk.Frame(f2)
+        ir.pack(fill="x", pady=(2, 0))
+        self.igrz_label = ttk.Label(ir, textvariable=self.igrz_text)
+        self.igrz_label.pack(side="left")
+        ttk.Button(ir, text="Where to get ig_rz.dat...", command=self.show_igrz_help).pack(side="right")
 
         # 3. pipeline
         f3 = ttk.LabelFrame(main, text="3. Run the pipeline", padding=6)
@@ -1133,6 +1306,106 @@ class App(tk.Tk):
                 color = "red"
         self.apf_status.set(text)
         self.apf_label.configure(foreground=color)
+        self.refresh_igrz_status()
+
+    def show_igrz_help(self):
+        """Pop-up with the places a current ig_rz.dat can be downloaded, as clickable links."""
+        folder = os.path.dirname(self.apf_var.get().strip()) or "."
+        dlg = tk.Toplevel(self)
+        dlg.title("Getting ig_rz.dat")
+        dlg.transient(self)
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+        text, _c, _cov = igrz_status(os.path.join(folder, "ig_rz.dat"), None)
+        ttk.Label(frm, text=text, font=("TkDefaultFont", 10, "bold"), wraplength=640, justify="left").pack(anchor="w")
+        ttk.Label(frm, wraplength=640, justify="left",
+                  text="ig_rz.dat holds IRI's monthly sunspot and ionospheric indices. It only needs replacing when the "
+                       "month of your data is past the end of its range. Click a link to open it in your browser:"
+                  ).pack(anchor="w", pady=(6, 6))
+        for label, url in IGRZ_SOURCES:
+            ttk.Label(frm, text=label, wraplength=640, justify="left").pack(anchor="w", pady=(4, 0))
+            link = ttk.Label(frm, text=url, foreground="#1a5fb4", cursor="hand2", font=("TkDefaultFont", 10, "underline"))
+            link.pack(anchor="w")
+            link.bind("<Button-1>", lambda e, u=url: webbrowser.open(u))
+        ttk.Label(frm, wraplength=640, justify="left", foreground="gray25",
+                  text=f"Save the file into {folder} (replacing the old one, after copying the old one to "
+                       "ig_rz.dat.bak), check that its first line is a date and not an error page, then press "
+                       "Re-check here.").pack(anchor="w", pady=(10, 0))
+        bf = ttk.Frame(frm)
+        bf.pack(fill="x", pady=(10, 0))
+        ttk.Button(bf, text="Close", command=dlg.destroy).pack(side="right")
+        ttk.Button(bf, text="Open folder", command=lambda: open_path(folder)).pack(side="right", padx=6)
+
+    def refresh_igrz_status(self):
+        want = None
+        src = self._selected_source()
+        if src:
+            try:
+                y, mo, d, _, _ = source_datetime(*src)
+                want = date(y, mo, d)
+            except ValueError:
+                pass
+        path = os.path.join(os.path.dirname(self.apf_var.get().strip()), "ig_rz.dat")
+        text, color, _ = igrz_status(path, want)
+        self.igrz_text.set(text)
+        self.igrz_label.configure(foreground=color)
+
+    def _apf_source_changed(self):
+        choice = self.apf_src_var.get()
+        if choice == "SERENE" and not apf107_sources(self.settings, "SERENE")[0]["name"] == "SERENE":
+            messagebox.showinfo("SERENE", "No SERENE link is set up yet. Press \"SERENE link...\" and paste the "
+                                          "link (or curl command) you were given.")
+            self.apf_src_var.set("ECHAIM")
+            return
+        self.settings["apf107_source"] = self.apf_src_var.get()
+        save_settings(self.settings)
+
+    def on_serene_link(self):
+        """Paste the link or curl command SERENE gave after registration; kept only in grape_gui_settings.json."""
+        dlg = tk.Toplevel(self)
+        dlg.title("SERENE download link")
+        dlg.transient(self)
+        dlg.grab_set()
+        frm = ttk.Frame(dlg, padding=12)
+        frm.pack(fill="both", expand=True)
+        ttk.Label(frm, justify="left", wraplength=560,
+                  text="Paste the link SERENE gave you, or the whole curl command. The token is stored only in "
+                       "grape_gui_settings.json on this computer (readable by you only, and not committed to git) "
+                       "and is never written to the log.").pack(anchor="w")
+        cur = self.settings.get("serene") or {}
+        status = ("Currently set: " + redact_url(cur["url"])) if cur.get("url") else "Currently: no link set."
+        if os.environ.get("SERENE_APF107_URL"):
+            status += "   (the SERENE_APF107_URL environment variable overrides it)"
+        ttk.Label(frm, text=status, foreground="gray40", wraplength=560).pack(anchor="w", pady=(6, 4))
+        box = tk.Text(frm, height=6, width=70, wrap="word")
+        box.pack(fill="both", expand=True)
+        box.focus_set()
+
+        def save():
+            try:
+                url, headers = parse_download_command(box.get("1.0", "end"))
+            except ValueError as e:
+                messagebox.showerror("SERENE link", str(e), parent=dlg)
+                return
+            self.settings["serene"] = {"url": url, "headers": headers}
+            save_settings(self.settings)
+            self.log(f"SERENE link saved: {redact_url(url)}" + (f" (+{len(headers)} header(s))" if headers else ""))
+            dlg.destroy()
+
+        def clear_saved():
+            self.settings.pop("serene", None)
+            if self.apf_src_var.get() == "SERENE":
+                self.apf_src_var.set("ECHAIM")
+                self.settings["apf107_source"] = "ECHAIM"
+            save_settings(self.settings)
+            self.log("SERENE link removed.")
+            dlg.destroy()
+
+        bf = ttk.Frame(frm)
+        bf.pack(fill="x", pady=(10, 0))
+        ttk.Button(bf, text="Cancel", command=dlg.destroy).pack(side="right")
+        ttk.Button(bf, text="Save", command=save).pack(side="right", padx=6)
+        ttk.Button(bf, text="Remove saved link", command=clear_saved).pack(side="left")
 
     def on_update_apf(self):
         if self.busy:
@@ -1142,14 +1415,16 @@ class App(tk.Tk):
             messagebox.showwarning("apf107.dat", "Set the apf107.dat location first.")
             return
         self._set_busy(True, "Downloading apf107.dat ...")
-        self.log(f"Downloading {APF107_URL}")
+        sources = apf107_sources(self.settings, self.apf_src_var.get())
 
         def worker():
             try:
-                last = download_apf107(path)
-                self.log(f"apf107.dat updated: now covers through {last:%Y-%m-%d}")
+                last, used = update_apf107(path, sources, attempts=3, log=self.log)
+                self.log(f"apf107.dat updated from {used}: now covers through {last:%Y-%m-%d}")
             except Exception as e:
                 self.log(f"ERROR: download failed: {e}")
+                self.log("Try again later, use the other source (SERENE link... sets it up), or download apf107.dat "
+                         "in a browser and point this window at it with Browse... (see Troubleshooting in the README).")
             self.post(self.refresh_apf107_status)
             self.post(lambda: self._set_busy(False, "Ready"))
 
@@ -1182,19 +1457,21 @@ class App(tk.Tk):
             "apf107.dat out of date",
             f"apf107.dat ends {last:%Y-%m-%d}, {short} day(s) before the data date "
             f"{run_date:%Y-%m-%d}.\n\nIRI would use fill values, which can crash pathfinder or give "
-            f"unreliable ray traces.\n\nDownload an updated copy from ECHAIM now?",
+            f"unreliable ray traces.\n\nDownload an updated copy now "
+            f"({' then '.join(x['name'] for x in apf107_sources(self.settings, self.apf_src_var.get()))})?",
         ):
             return False
         self.config(cursor="watch")
         self.update_idletasks()
         try:
-            new_last = download_apf107(path)
+            new_last, used = update_apf107(path, apf107_sources(self.settings, self.apf_src_var.get()),
+                                           attempts=1, log=self.log)
         except Exception as e:
             messagebox.showerror("Download failed", str(e))
             return False
         finally:
             self.config(cursor="")
-        self.log(f"apf107.dat updated: now covers through {new_last:%Y-%m-%d}")
+        self.log(f"apf107.dat updated from {used}: now covers through {new_last:%Y-%m-%d}")
         self.refresh_apf107_status()
         if run_date > new_last and (run_date - new_last).days == 1:
             return self._extend_one_day(path, run_date)
@@ -1531,9 +1808,18 @@ class App(tk.Tk):
                 elif short > 1 and not messagebox.askyesno(
                         "apf107.dat out of date",
                         f"apf107.dat ends {short} days before {run_day:%Y-%m-%d}. IRI would use fill values, which "
-                        "can crash pathfinder.\n\nUse Update from ECHAIM first, or continue anyway?\n\n"
+                        "can crash pathfinder.\n\nUse Update first, or continue anyway?\n\n"
                         "Continue anyway?"):
                     return
+        if "pathfinder" in steps:
+            _t, _c, covered = igrz_status(os.path.join(os.path.dirname(self.apf_var.get().strip()), "ig_rz.dat"),
+                                          date(y, mo, d))
+            if covered is False and not messagebox.askyesno(
+                    "ig_rz.dat out of date",
+                    f"{_t}\n\nIRI may stop or give poor results for this month.\n\nContinue anyway?\n"
+                    "(No stops here and shows where to get a current file.)"):
+                self.show_igrz_help()
+                return
         use_db = self.db_var.get()
         if use_db and not os.environ.get("CLICKHOUSE_PASSWORD"):
             if not messagebox.askyesno(
