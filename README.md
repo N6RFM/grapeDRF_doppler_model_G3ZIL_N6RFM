@@ -223,13 +223,21 @@ The upstream scripts rewrite the whole config file when they save the path lengt
 
 The ray tracing step wrote nothing, so there is nothing to plot. Read the PyLap messages just above in the Output box. A missing `pylap` or an `apf107.dat` problem is the usual cause (see the apf107 entry above).
 
+### The spectrogram stops with `OSError: Data gaps found`
+
+Older versions stopped at the first gap in the Digital RF data (a few missing minutes are common). `grape_fft_spectrogram_ch*.py` now reads the continuous pieces and leaves the missing samples empty, so the gaps show as blank stripes in the spectrogram. The log says "Data gaps found - reading the continuous blocks only" and "Samples present: ... (96.x %)". The synthetic traces are drawn through the gaps because the model does not know about them. The original `grape_fft_spectrogram.py` still stops at a gap.
+
+### Modefinder says "the data suggests: 370 371"
+
+`modefinder` compares the E/F height in `config/heuristics.ini` (`max_apogee_E`, `min_apogee_F`) with the first empty 10 km bin it finds in the apogee heights. When the heights run on without a gap (mostly F-layer rays) that bin is far above the E layer, so there is nothing to change. `modefinder_quiet.py` now says "no clear E/F gap" in that case and only asks you to edit the heuristics when it finds a real gap more than 5 km from your setting.
+
 ### Where are my results?
 
 Each step lists the files it wrote in the Output box, and when a run finishes a results window opens. Close it and you can bring it back with **Show last results** (it is kept until you start the next analysis, even after closing the window). **Open results folder (output/)** opens the output folder. The synthetic spectra are in the ClickHouse table `psws.synth_spec`.
 
 ### Copying or saving the log
 
-Select text in the Output box and press Ctrl+C (or use **Copy**, which copies everything when nothing is selected). **Save to file...** writes the log to a text file, and **Clear** empties it. Right-click gives the same options.
+Select text in the Output box and press Ctrl+C (or use **Copy**, which copies everything when nothing is selected). **Save to file...** writes the log to a text file, and **Clear** empties it. Right-click gives the same options. Every pipeline run is also written automatically to `output/logs/run_<config>_<UTC>_<time>.log` (the last log line gives the path), so nothing is lost when the window closes.
 
 ## Staying in step with upstream
 

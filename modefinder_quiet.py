@@ -71,7 +71,11 @@ print("Data, config and heuristics read in")
 zeros=np.asarray(np.where(count == 0))       # find indicies where there are no apogees, looking for E F gap.
 e_f_boundary=(np.min(zeros[zeros>3]))*10+80  # finds index for lowest empty height above bin 3, i.e.> 120 km then scale to height
 print("The heuristics E max and F min are: ", max_apogee_E,min_apogee_F, " the data suggests:", e_f_boundary, e_f_boundary+1)
-if abs(max_apogee_E-e_f_boundary) > 5:
+if e_f_boundary > 200:
+   # the first empty 10 km bin is far above the E layer, so the apogees run on without a gap
+   # (typical for a day or path with mostly F-layer rays): there is no E/F boundary to suggest
+   print("There is no clear E/F gap in the apogee heights of this data, so the heuristics are kept as they are")
+elif abs(max_apogee_E-e_f_boundary) > 5:
    print("This suggests you should manually alter the values in the heuristics file and rerun modefinder")
 
 ###################################
