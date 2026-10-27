@@ -671,7 +671,7 @@ def snapshot_files():
     Only output/ is watched, so edits you make elsewhere while a step runs are not mistaken for results."""
     snap = {}
     for root, dirs, files in os.walk(os.path.join(BASE_DIR, "output")):
-        dirs[:] = [d for d in dirs if d not in SCAN_SKIP]
+        dirs[:] = [d for d in dirs if d not in SCAN_SKIP and not (d == "logs" and os.path.basename(root) == "output")]
         for f in files:
             if f == os.path.basename(SETTINGS_FILE) or f.endswith((".pyc", ".tmp")):
                 continue
@@ -1856,7 +1856,7 @@ class App(tk.Tk):
             return
         try:
             y, mo, d, h, mi = read_ut(os.path.join(CONFIG_DIR, cfg))
-            self.ut_var.set(f"UT in config: {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}")
+            self.ut_var.set(f"UTC in config: {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}")
         except Exception as e:
             self.ut_var.set("No 'ut = [...]' line in this config (load data for this station first)" if "No 'ut" in str(e) else f"UT unreadable: {e}")
 
@@ -1983,7 +1983,8 @@ class App(tk.Tk):
         rec = (self.settings.get("loaded") or {}).get(callsign)
         data_name = rec["source"] if rec else f"ch0_{callsign}"
         self.title(f"{self.base_title}  -  {callsign} {y:04d}-{mo:02d}-{d:02d}")
-        self._set_busy(True, f"Running pipeline for {callsign}  |  {data_name}  |  UT {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}")
+        self._run_status = f"{callsign}  |  {data_name}  |  UTC {y:04d}-{mo:02d}-{d:02d} {h:02d}:{mi:02d}"
+        self._set_busy(True, f"Running pipeline for {self._run_status}")
         self.btn_cancel.configure(state="normal")
         threading.Thread(
             target=self._pipeline_worker,
@@ -2145,7 +2146,7 @@ class App(tk.Tk):
         self._open_run_log(cfg, timestamp)
         self.log("=" * 60)
         self.log(self.run_data_text)
-        self.log(f"Config: {cfg}   UT: {timestamp}   Steps: {', '.join(steps)}   Frequencies: {freq_txt}")
+        self.log(f"Config: {cfg}   UTC: {timestamp}   Steps: {', '.join(steps)}   Frequencies: {freq_txt}")
         self.log("=" * 60)
         outcome, detail = "ok", ""
         needs_db = use_db and any(k in steps for k in ("synthspec", "spectrogram"))
@@ -2172,6 +2173,8 @@ class App(tk.Tk):
                 self.post(lambda k=key: self._tree_set(k, "Running ...", ""))
                 self.log("-" * 40)
                 self.log(f"Starting: {key}" + (f"  ({label})" if label else ""))
+                self.post(lambda k=key, lb=label: self.status_var.set(
+                    f"Running {k}" + (f" ({lb})" if lb else "") + f"  |  {self._run_status}"))
                 t0 = datetime.now()
                 before = snapshot_files()
                 rc = self._run_cmd(cmds[key])
@@ -2216,6 +2219,7 @@ class App(tk.Tk):
                     raise RuntimeError("could not start ClickHouse")
                 self.ch_started_by_gui = True
                 self.log("ClickHouse is up")
+                self.post(lambda: self.status_var.set(f"ClickHouse is up - running pipeline for {self._run_status}"))
             if needs_db:
                 # fail now, not after an hour of ray tracing
                 if not ch_check(py, self.log):
@@ -2238,7 +2242,7 @@ class App(tk.Tk):
                     self.log(f"FREQUENCY {n} of {len(freqs)}: {label}   (config freq set, spectrogram index {idx})")
                     self.log("#" * 60)
                     self.post(lambda n=n, lb=label: self.status_var.set(
-                        f"Frequency {n} of {len(freqs)}: {lb}  |  {callsign}  |  UT {timestamp}"))
+                        f"Frequency {n} of {len(freqs)}: {lb}  |  {callsign}  |  UTC {timestamp}"))
                     for key, _lbl in STEP_DEFS:
                         self.post(lambda k=key: self._tree_set(k, "Pending" if k in steps else "Skipped", ""))
                 pass_before = snapshot_files()

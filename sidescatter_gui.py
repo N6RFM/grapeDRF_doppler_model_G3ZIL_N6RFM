@@ -234,7 +234,7 @@ class SSApp(tk.Tk):
         f2.pack(fill="x", pady=(8, 0))
         g = ttk.Frame(f2)
         g.pack(fill="x")
-        ttk.Label(g, text="UT (y m d h m):").grid(row=0, column=0, sticky="w")
+        ttk.Label(g, text="UTC (y m d h m):").grid(row=0, column=0, sticky="w")
         ut_row = ttk.Frame(g)
         ut_row.grid(row=0, column=1, columnspan=5, sticky="w", padx=6)
         for i, (v, w) in enumerate(zip(self.ut_vars, (6, 4, 4, 4, 4))):
@@ -260,7 +260,7 @@ class SSApp(tk.Tk):
         m = ttk.Frame(f3)
         m.pack(fill="x")
         self.mode_var = tk.StringVar(value="single")
-        ttk.Radiobutton(m, text="One time (the UT above)", variable=self.mode_var, value="single",
+        ttk.Radiobutton(m, text="One time (the UTC above)", variable=self.mode_var, value="single",
                         command=self._mode_changed).pack(side="left")
         ttk.Radiobutton(m, text="Animation over time", variable=self.mode_var, value="anim",
                         command=self._mode_changed).pack(side="left", padx=14)

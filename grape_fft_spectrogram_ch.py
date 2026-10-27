@@ -113,7 +113,28 @@ data=np.empty(m_samples)
 
 do.get_channels()
 # get samples, these are i,q pairs. Starting at s and going on for length*10*60
-input = do.read_vector(s, n_samples, channel)
+try:
+  input = do.read_vector(s, n_samples, channel)
+except IOError:
+  # Gaps in the data: read each continuous block, leave the missing samples as NaN
+  print("Data gaps found - reading the continuous blocks only; missing minutes will be blank")
+  s_int = int(s)          # s is a float when the sample rate is a float; slicing needs integers
+  n_int = int(n_samples)
+  blocks = do.get_continuous_blocks(s_int, s_int + n_int, channel)
+  if len(blocks) == 0:
+    print("No data at all in the requested period")
+    sys.exit()
+  nsub = int(do.get_properties(channel)["num_subchannels"])
+  shape = (n_int,) if nsub == 1 else (n_int, nsub)
+  input = np.full(shape, np.nan + 1j*np.nan, dtype=np.complex64)
+  have = 0
+  for b0, blen in blocks.items():
+    lo = int(max(b0, s_int))
+    hi = int(min(b0 + blen, s_int + n_int))
+    if hi > lo:
+      input[lo - s_int:hi - s_int] = do.read_vector(lo, hi - lo, channel)
+      have += hi - lo
+  print("Samples present: %d of %d (%.1f %%)" % (have, n_int, 100.0 * have / n_int))
 if len(freqList) > 1: 
   data=input[:,freq_index]
 else:                               # single channel Grape so 1 dimensional data array
