@@ -106,12 +106,29 @@ data=np.zeros(m_samples)
 ########################################
 
 do.get_channels()
-# get samples, these are i,q pairs. Starting at s
-input = do.read_vector(s, n_samples, channel)
-if len(freqList) > 1: 
-  data=input[:,freq_index]
-else:                               # single channel Grape so 1 dimensional data array
-  data=input[:]
+
+s_int = int(s)                  # s may be numpy longdouble, digital_rf wants plain ints
+n_int = int(n_samples)
+data = np.full(n_int, np.nan, dtype=np.complex64)
+
+blocks = do.get_continuous_blocks(s_int, s_int + n_int, channel)
+if len(blocks) == 0:
+    print("No data at all in the requested period for channel ", channel)
+    sys.exit()
+
+for b_start, b_len in blocks.items():
+    lo = max(int(b_start), s_int)
+    hi = min(int(b_start) + int(b_len), s_int + n_int)
+    if hi <= lo:
+        continue
+    chunk = do.read_vector(lo, hi - lo, channel)
+    if len(freqList) > 1:
+        chunk = chunk[:, freq_index]
+    data[lo - s_int : hi - s_int] = chunk
+
+missing = 100.0 * np.isnan(data).sum() / n_int
+print("Percentage of requested period with no data: %.1f%%" % missing)
+
 print ("First data sample is ", data[0])
 
 with open(csv_filename, 'w', encoding='UTF8',) as out_file:     # open a csv file for write, write metadata, headers then data rows
@@ -122,21 +139,29 @@ with open(csv_filename, 'w', encoding='UTF8',) as out_file:     # open a csv fil
 
 # Analysis outer and inner loops
  for j in range (0,length):
-  R_T0=0
-  R_Ts=0
-  k=int(j*m_samples)
-  for i in range (0, m_samples):                        # analysis and average frequency and level every specified time window
-    R_T0=R_T0+data[i+k]*np.conjugate(data[i+k])         # ACF function at zero lag
-    R_Ts=R_Ts+data[i+k]*np.conjugate(data[i+1+k])       # ACF function at one lag
-    real[i]=np.real(data[i+k])  
-  freq[j]=round(-(1/(2*np.pi*0.1))*np.angle(R_Ts),5)    # round for csv file, 0.01 mHz resolution is OTT but useful for WW0WWV
-  level=np.std(real)+np.average(real)                   # matches expected from 20*log10(65535) as 16 bit full scale
-                                                        # with very small freq shifts have to add 'DC' component
-  dB_level[j]=round(20*np.log10(level),2)               # round for csv, 2 decimal places is sensible
-  spread[j]=(1.414/(2*np.pi*0.1))*np.sqrt(np.abs(np.log((R_T0/np.abs(R_Ts)))))*1000    # spread in milliHertz
-  spread[j]=round(spread[j],0)                          # round for csv file, 1 mHz resolution is sensible
-  time[j]=round(((j)/(60*(60/time_window)))+hours_offset,5)                # time in hours, rounded for csv file
-  writer.writerow([time[j],freq[j],spread[j],dB_level[j]])
+    k=int(j*m_samples)
+    time[j]=round(((j)/(60*(60/time_window)))+hours_offset,5) # time in hours, rounded for csv file
+
+    # the lag-1 term reads one sample beyond the minute, hence m_samples+1
+    if np.isnan(data[k:k+m_samples+1]).any():
+        freq[j]=np.nan
+        spread[j]=np.nan
+        dB_level[j]=np.nan
+        writer.writerow([time[j],'','',''])   # blank cells show as gaps in Excel charts
+        continue
+
+    R_T0=0
+    R_Ts=0
+    for i in range (0, m_samples):
+        R_T0=R_T0+data[i+k]*np.conjugate(data[i+k])
+        R_Ts=R_Ts+data[i+k]*np.conjugate(data[i+1+k])
+        real[i]=np.real(data[i+k])
+    freq[j]=round(-(1/(2*np.pi*0.1))*np.angle(R_Ts),5)
+    level=np.std(real)+np.average(real)
+    dB_level[j]=round(20*np.log10(level),2)
+    spread[j]=(1.414/(2*np.pi*0.1))*np.sqrt(np.abs(np.log((R_T0/np.abs(R_Ts)))))*1000
+    spread[j]=round(spread[j],0)
+    writer.writerow([time[j],freq[j],spread[j],dB_level[j]])
 
 ###########################################
 # Plots of Doppler, Spread and Level

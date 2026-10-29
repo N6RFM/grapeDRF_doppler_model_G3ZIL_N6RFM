@@ -118,21 +118,24 @@ csv_filename=csv_dir+'/one_FFT_data_' + "_" + str(frequency) + "MHz_" + date + "
 ########################################
 # digital_rf read in code
 ########################################
-
 do.get_channels()
-# get samples, these are i,q pairs. Starting at s
-input = do.read_vector(s, n_samples, channel)
-if len(freqList) > 1: 
-  data=input[:,freq_index]
-else:                               # single channel Grape so 1 dimensional data array
-  data=input[:]
-unix_time=np.int64(s/10)
 
+unix_time=np.int64(s/10)
 plot_time = datetime.fromtimestamp(unix_time,pytz.utc).strftime('%Y-%m-%dT%H%M%S')
 plot_hour = datetime.fromtimestamp(unix_time,pytz.utc).strftime('%H:%M:%S')
 print ("Analysis at ",plot_time)
-# get samples, these are i,q pairs. Starting at s and going on for length*10*60
-data = do.read_vector(s, n_samples, channel)
+
+# a single read; digital_rf raises OSError if the minute is not fully covered
+try:
+    data = do.read_vector(int(s), n_samples, channel)
+except (OSError, ValueError) as e:
+    print("Cannot read a complete minute of data starting at", plot_time, "UTC for channel", channel)
+    print("Probably a gap in the digital_rf data, or a time outside the recorded range.")
+    print("digital_rf says:", e)
+    sys.exit(1)
+
+if len(freqList) > 1:
+    data=data[:,freq_index]          # select the sub-channel once, data is now 1D
 
 ######################
 # Calculations
@@ -142,13 +145,8 @@ data = do.read_vector(s, n_samples, channel)
 x=fftshift(fftfreq(m_samples,1/fs))
 # generate a Hann window of length m_samples (i.e. 600 samples)
 window = signal.windows.hann(m_samples)
-
-if len(freqList) > 1: 
-  yf=fftshift(fft(data[0:m_samples,freq_index]*window,norm="forward",overwrite_x=False)*Hann_factor)     # do the FFT and fftshift moves 0 Hz to centre
-else:
-  yf=fftshift(fft(data[0:m_samples]*window,norm="forward",overwrite_x=False)*Hann_factor)     # fudge, cannot understand why I need 2 indicies above, this is for single freq Grape
-
-yf=10*np.log10(np.abs(yf))                                                                             # convert to dB
+yf=fftshift(fft(data[0:m_samples]*window,norm="forward",overwrite_x=False)*Hann_factor)
+yf=10*np.log10(np.abs(yf))  
 
 with open(csv_filename, 'w', encoding='UTF8',) as out_file:     # open the csv file to write to
  writer=csv.writer(out_file)
@@ -168,7 +166,12 @@ peakind=remove_adjacent(peaks)                              # in case single pea
 
 # find the index at four successively reducing maxima: algorithm finds first max, finds freq and level at that index, then sets max that index to zero
 # and iterates
+n_found=n_peaks
 for i in range(0,n_peaks):
+    if len(peakind)==0:
+        print("Only ", i, " peak(s) found, fewer than the ", n_peaks, " requested")
+        n_found=i
+        break
     max=np.argmax(yf[peakind])
     index_max=peakind[max]
     index_max_original=index_max
@@ -212,9 +215,9 @@ plt.plot(x, yf, color='black')
 plt.xlabel(xaxis_title)
 plt.ylabel("PSD uncalibrated (dB)")
 
-plt.scatter(freq_peaks[0:n_peaks], level_peaks[0:n_peaks], s= 40, c = 'red') # plots red dots at the peaks
+plt.scatter(freq_peaks[0:n_found], level_peaks[0:n_found], s= 40, c = 'red') # plots red dots at the peaks
 
-for i in range (0,n_peaks):     # annotates the peak frequencies
+for i in range (0,n_found):     # annotates the peak frequencies
    ax.annotate('Pk (%.3f)'% (freq_peaks[i]), (freq_peaks[i], (np.random.uniform()*1)+(level_peaks[i])))
 
 plt.savefig(plot_dir +"/One_Spectrum" + "_" + str(frequency) + "MHz_" + plot_time + ".png", dpi=600)

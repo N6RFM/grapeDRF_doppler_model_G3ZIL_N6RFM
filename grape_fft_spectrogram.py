@@ -107,17 +107,33 @@ zf=np.empty(m_samples)           # this is an initially empty array, for the fre
 data=np.empty(m_samples)
 
 ########################################
-# digital_rf read in code
+# digital_rf read in code - where handling missing data is from Claude October 2026
 ########################################
-
 do.get_channels()
-# get samples, these are i,q pairs. Starting at s and going on for length*10*60
-input = do.read_vector(s, n_samples, channel)
-if len(freqList) > 1: 
-  data=input[:,freq_index]
-else:                               # single channel Grape so 1 dimensional data array
-  data=input[:]
 
+# Read only the continuous blocks that exist, into an array pre-filled with NaN,
+# so gaps stay aligned with clock time and flow through the FFT as NaN
+s_int = int(s)                  # s may be numpy longdouble, digital_rf wants plain ints
+n_int = int(n_samples)
+data = np.full(n_int, np.nan, dtype=np.complex64)
+
+blocks = do.get_continuous_blocks(s_int, s_int + n_int, channel)
+if len(blocks) == 0:
+    print("No data at all in the requested period for channel ", channel)
+    sys.exit()
+
+for b_start, b_len in blocks.items():
+    lo = max(int(b_start), s_int)                    # clip block to the requested range
+    hi = min(int(b_start) + int(b_len), s_int + n_int)
+    if hi <= lo:
+        continue
+    chunk = do.read_vector(lo, hi - lo, channel)
+    if len(freqList) > 1:
+        chunk = chunk[:, freq_index]
+    data[lo - s_int : hi - s_int] = chunk
+
+missing = 100.0 * np.isnan(data).sum() / n_int
+print("Percentage of requested period with no data: %.1f%%" % missing)
 print ("First data sample is ", data[0])
 
 ########################################
@@ -152,7 +168,17 @@ xaxis_title="Time on " + date + " (hours UTC)"
 
 # Autoscale for PSD Y axis based on spectrogram values. Inevitably there are nans, so remove them and flatten array
 # Use these percentiles to set limits, but add 3 dB to max to be sure
+zf = np.full(m_samples, np.nan)      # also replaces the np.empty placeholder, see note below
 
+for j in range(0, length-1):
+    k = int(j*m_samples)
+    seg = data[k:k+m_samples]
+    if np.isnan(seg).any():
+        yt_abs = np.full(m_samples, np.nan)          # gap: leave white in the contour plot
+    else:
+        yt = fft(seg*window, norm="forward", overwrite_x=False)*Hann_factor
+        yt_abs = fftshift(np.abs(yt))
+    zf = np.column_stack((zf, yt_abs))
 zf_dB_no_nan=zf_dB[~np.isnan(zf_dB)]
 min_level=np.floor(np.percentile(zf_dB_no_nan,10))  # 10% as min, to reduce background shading
 max_level=np.ceil(np.percentile(zf_dB_no_nan,99.9))+3
