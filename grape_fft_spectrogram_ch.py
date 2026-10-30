@@ -183,7 +183,9 @@ levels=np.arange(min_level,max_level+6,3)
 fig, ax= plt.subplots()   # 
 
 # Contour plot, label, get colorbar and label
-cs=ax.contourf(x,yf,zf_dB, levels, cmap=color_map)
+# values below the first level would be left white (speckles): give them the lowest colour; NaN gaps stay blank
+zf_dB_plot=np.where(zf_dB < levels[0], levels[0]+0.01, zf_dB)
+cs=ax.contourf(x,yf,zf_dB_plot, levels, cmap=color_map)
 
 plt.suptitle(plot_title)
 plt.xlabel(xaxis_title)
