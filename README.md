@@ -103,6 +103,20 @@ sudo apt install python3-tk
 sudo systemctl start clickhouse-server
 ```
 
+### ClickHouse is already running when I open the window (it starts at boot)
+
+The window shows ClickHouse as running before you did anything, and **Stop afterwards** never stops it. Cause: the service is enabled in systemd, so it starts at every boot. The window only stops a server that it started itself, so it leaves this one alone. To make ClickHouse run only while the window uses it, turn off boot-start and stop the running server:
+
+```bash
+systemctl is-enabled clickhouse-server      # "enabled" means it starts at boot
+sudo systemctl disable clickhouse-server    # remove the boot-start (asks for your password)
+sudo systemctl stop clickhouse-server       # stop the copy that is running now
+systemctl is-enabled clickhouse-server      # should now say "disabled"
+systemctl is-active clickhouse-server       # should say "inactive"
+```
+
+The window then starts ClickHouse when a run needs it (with **Auto-start if needed** ticked) and stops it again afterwards (with **Stop afterwards** ticked). Anything you run from a terminal outside the window, such as `clickhouse-client`, finds it stopped until you start it with `sudo systemctl start clickhouse-server` or the **Start** button. A package upgrade can switch boot-start on again: if ClickHouse is running after an upgrade, check `systemctl is-enabled clickhouse-server` and repeat the `disable` line.
+
 ### `Authentication failed: password is incorrect, or there is no user with such name`
 
 The scripts log in as the user named in `get_client(...)` (look for `username=` in `synthspec_ch_quiet.py`), with the password taken from the `CLICKHOUSE_PASSWORD` environment variable. The usual causes:
